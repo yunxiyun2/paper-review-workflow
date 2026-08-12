@@ -140,12 +140,20 @@ class StepExecutor:
                 log_lines=[f"[ERROR] {msg}"],
             )
 
+        # Resolve ${{ }} expressions in with_params values
+        resolved_params = {}
+        for k, v in (step_def.with_params or {}).items():
+            if isinstance(v, str) and "${{" in v:
+                resolved_params[k] = self.ctx.resolve(v, job_instance)
+            else:
+                resolved_params[k] = v
+
         # Build context snapshot
         ctx_snapshot = self.ctx.build_context(job_instance, None)
 
         try:
             result = action.run(
-                params=step_def.with_params,
+                params=resolved_params,
                 env=env,
                 context=ctx_snapshot,
                 log_callback=log_cb,

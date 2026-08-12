@@ -177,3 +177,69 @@ jobs:
     assert elapsed >= 2.0, (
         f"calls should be serial (>=2.0s spread), got {elapsed:.2f}s"
     )
+
+
+def test_matrix_with_param_resolution(fake_paper_session, tmp_path):
+    """Verify ${{ matrix.X }} in with params is resolved correctly."""
+    from paper_review_workflow.actions.registry import ActionRegistry
+    from paper_review_workflow.engine import ReviewEngine
+    from paper_review_workflow.storage.memory import MemoryStorage
+    from paper_review_workflow.llm.schemas import DimensionScore
+    from paper_review_workflow.llm.base import LLMResponse
+    from unittest.mock import MagicMock, patch
+
+    ActionRegistry._instance = None
+    engine = ReviewEngine(storage=MemoryStorage())
+
+    # Re-register dimension action (was reset above)
+    from paper_review_workflow.actions.builtin import register_builtin_actions
+    register_builtin_actions(engine.registry)
+
+    fake_score = DimensionScore(
+        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
+        justification="x" * 200,
+    )
+    fake_response = MagicMock(spec=LLMResponse)
+    fake_response.structured = fake_score
+    fake_response.usage = {"input_tokens": 100, "output_tokens": 50,
+                           "cache_creation_input_tokens": 0, "cache_read_input_tokens": 30000}
+    fake_response.model = "test-model"
+
+    with patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
+        mock_client = MagicMock()
+        mock_client.complete.return_value = fake_response
+        mock_client.model = "claude-sonnet-4-6"
+        mock_from_env.return_value = mock_client
+
+        yaml = tmp_path / "with_param_test.yaml"
+        yaml.write_text(f"""
+name: with-param-test
+on: {{workflow_dispatch: {{}}}}
+env:
+  LLM_PROVIDER: anthropic
+  LLM_MODEL: test-model
+  SESSION_DIR: "{fake_paper_session}"
+jobs:
+  dimensions:
+    runs-on: local
+    strategy:
+      matrix:
+        dimension: [novelty, soundness]
+      max-parallel: 2
+    steps:
+      - uses: paper-review/dim_score@v1
+        with:
+          dimension: ${{{{ matrix.dimension }}}}
+          session_dir: "${{{{ env.SESSION_DIR }}}}"
+          full_text_path: "${{{{ env.SESSION_DIR }}}}/00_extract/full_text.md"
+          metadata_path: "${{{{ env.SESSION_DIR }}}}/00_extract/metadata.json"
+""")
+
+        run = engine.run_from_file(str(yaml), payload={})
+
+    assert run.status.value == "success", f"run failed: {run.status.value}"
+    # Verify both dimensions completed
+    assert "dimensions_novelty" in run.jobs
+    assert "dimensions_soundness" in run.jobs
+    assert run.jobs["dimensions_novelty"].status.value == "success"
+    assert run.jobs["dimensions_soundness"].status.value == "success"

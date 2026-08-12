@@ -26,6 +26,17 @@ class WorkflowContext:
             "jobs": {jid: {"outputs": j.outputs, "status": j.status.value, "result": j.status.value}
                      for jid, j in self.run.jobs.items()},
         }
+        # Add matrix context from MATRIX_* env vars (injected by matrix executor
+        # into the sub-job's job_def.env, not the workflow-level run.env)
+        matrix: Dict[str, str] = {}
+        merged_env = dict(self.run.env or {})
+        if job_instance and job_instance.job_def:
+            merged_env.update(job_instance.job_def.env or {})
+        for k, v in merged_env.items():
+            if k.startswith("MATRIX_"):
+                matrix[k[7:].lower()] = v
+        if matrix:
+            ctx["matrix"] = matrix
         if job_instance:
             ctx["job"] = {"id": job_instance.job_def.id if job_instance.job_def else ""}
             ctx["steps"] = {s.step_def.id: {"outputs": s.outputs}
