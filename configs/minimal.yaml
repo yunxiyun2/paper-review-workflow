@@ -1,0 +1,23 @@
+name: minimal-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Message to echo"
+        required: false
+        default: hello
+        type: string
+
+env:
+  SESSIONS_ROOT: ./sessions
+
+jobs:
+  echo:
+    name: "Echo"
+    runs-on: local
+    steps:
+      - id: echo
+        uses: paper-review/echo@v1
+        with:
+          message: ${{ inputs.message }}
