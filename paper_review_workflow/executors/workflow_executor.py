@@ -164,20 +164,46 @@ class WorkflowExecutor:
         future_to_jid: Dict = {}
 
         def _submit_ready_jobs() -> bool:
-            """Submit all pending jobs whose dependencies are satisfied."""
-            submitted = False
-            for jid in list(pending):
-                if jid in running:
-                    continue
-                if coordinator.workflow_sm.is_terminal:
+            """Submit all pending jobs whose dependencies are satisfied.
+
+            Returns True if any progress was made — either by submitting a
+            job to the pool OR by skipping an already-completed job (which
+            moves it from pending to completed).  Returns False only when no
+            ready job could be advanced, signalling a circular dependency.
+            """
+            progressed = False
+            # Loop until no further progress within this call: skipping an
+            # already-completed job may unblock downstream jobs that should
+            # be submitted (or also skipped) in the same pass.
+            while True:
+                advanced_this_pass = False
+                for jid in list(pending):
+                    if jid in running:
+                        continue
+                    if coordinator.workflow_sm.is_terminal:
+                        break
+                    if all(dep in completed for dep in jobs[jid].needs):
+                        # Resume: if this job already completed successfully
+                        # in a previous run, skip re-execution and treat it as
+                        # already done.  Its outputs are preserved in
+                        # run.jobs[jid].
+                        existing = run.jobs.get(jid)
+                        if existing is not None and existing.status == JobStatus.SUCCESS:
+                            logger.info(f"  ⏭ skip already-completed Job: {jid}")
+                            pending.discard(jid)
+                            completed.add(jid)
+                            progressed = True
+                            advanced_this_pass = True
+                            continue
+                        logger.info(f"  ▶ submit Job: {jid}")
+                        f = pool.submit(job_executor.execute, jobs[jid], run)
+                        future_to_jid[f] = jid
+                        running.add(jid)
+                        progressed = True
+                        advanced_this_pass = True
+                if not advanced_this_pass:
                     break
-                if all(dep in completed for dep in jobs[jid].needs):
-                    logger.info(f"  ▶ submit Job: {jid}")
-                    f = pool.submit(job_executor.execute, jobs[jid], run)
-                    future_to_jid[f] = jid
-                    running.add(jid)
-                    submitted = True
-            return submitted
+            return progressed
 
         try:
             # Initial submission: find all dependency-free jobs

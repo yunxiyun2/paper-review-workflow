@@ -80,6 +80,12 @@ class ReviewEngine:
             self._reset_all_components(run)
         elif rerun_components:
             self._mark_for_rerun(run, rerun_components)
+        else:
+            # Default resume: reset only failed/skipped jobs (and the workflow
+            # status) so already-completed jobs are skipped on re-execution.
+            # This is the "resume from failure" path: completed jobs are
+            # preserved, failed + downstream jobs are re-run.
+            self._reset_failed_and_downstream(run)
         return self._do_execute(run)
 
     # -- Control --
@@ -182,6 +188,56 @@ class ReviewEngine:
                     downstream.add(job_id)
                     changed = True
         for job_id in downstream:
+            job = run.jobs[job_id]
+            job.status = JobStatus.PENDING
+            job.start_time = None
+            job.end_time = None
+            job.outputs = {}
+            for step in job.steps:
+                step.status = StepStatus.PENDING
+                step.start_time = None
+                step.end_time = None
+                step.outputs = {}
+                step.log = []
+                step.error_msg = ""
+        run.status = WorkflowStatus.PENDING
+        run.start_time = None
+        run.end_time = None
+
+    def _reset_failed_and_downstream(self, run: WorkflowRun) -> None:
+        """Default resume: reset all non-SUCCESS jobs to PENDING.
+
+        Already-completed (SUCCESS) jobs are preserved so the executor's
+        _schedule_jobs can skip them on re-execution.  Failed, skipped,
+        and cancelled jobs (and any downstream jobs that depend on them,
+        directly or transitively) are reset to PENDING so they re-run.
+
+        Matrix sub-jobs (e.g. dimensions_novelty) are individual JobInstance
+        entries in run.jobs; if their parent job is being re-run, the matrix
+        executor will overwrite them -- that is a known limitation for M6.2.
+        For non-matrix jobs, SUCCESS is preserved and skipped.
+        """
+        # Identify all non-SUCCESS job IDs that need to be re-run
+        to_reset: set = set()
+        for job_id, job in run.jobs.items():
+            if job.status != JobStatus.SUCCESS:
+                to_reset.add(job_id)
+        # Propagate to downstream jobs that depend (transitively) on any
+        # job being reset -- they must also re-run because their inputs may
+        # have changed or they were skipped due to upstream failure.
+        all_job_ids = list(run.jobs.keys())
+        changed = True
+        while changed:
+            changed = False
+            for job_id in all_job_ids:
+                if job_id in to_reset:
+                    continue
+                job = run.jobs[job_id]
+                if job.job_def and any(d in to_reset for d in job.job_def.needs):
+                    to_reset.add(job_id)
+                    changed = True
+        # Reset each job in to_reset to PENDING
+        for job_id in to_reset:
             job = run.jobs[job_id]
             job.status = JobStatus.PENDING
             job.start_time = None
