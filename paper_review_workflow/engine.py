@@ -172,11 +172,31 @@ class ReviewEngine:
                         p.unlink()
 
     def _mark_for_rerun(self, run: WorkflowRun, components: List[str]) -> None:
-        """Reset specified components and their downstream to pending."""
+        """Reset specified components and their downstream to pending.
+
+        Matrix sub-jobs (e.g. dimensions_novelty) are expanded at runtime by
+        JobExecutor._execute_matrix_job, which sets the sub-job ID to
+        f"{parent_id}_{combo}".  Downstream jobs (e.g. synthesize) declare
+        their `needs` against the PARENT job ID (e.g. dimensions), not the
+        sub-job ID, so a naive transitive-closure on sub-job IDs would fail
+        to cascade.  To bridge this, when a matrix sub-job is in the rerun
+        set we also add its parent job ID to the downstream set.  The
+        parent is reset to PENDING so the matrix re-expands on re-execution;
+        this means sibling sub-jobs (e.g. dimensions_soundness) are also
+        re-run -- a known limitation for matrix rerun.
+        """
         all_jobs = list(run.jobs.keys())
-        downstream: set = set()
-        for c in components:
-            downstream.add(c)
+        downstream: set = set(components)
+        # Matrix parent expansion: if a component is a matrix sub-job (its
+        # ID starts with "<parent_id>_"), add the parent to downstream so
+        # jobs depending on the parent cascade correctly.
+        for c in list(downstream):
+            for job_id in all_jobs:
+                if job_id == c:
+                    continue
+                if c.startswith(job_id + "_"):
+                    downstream.add(job_id)
+                    break
         changed = True
         while changed:
             changed = False
