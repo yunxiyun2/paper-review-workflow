@@ -1,7 +1,5 @@
-import os
 import pytest
 from paper_review_workflow.core.parser import WorkflowParser
-from paper_review_workflow.core.models import WorkflowDef
 
 
 @pytest.fixture
@@ -93,3 +91,21 @@ jobs:
     parser = WorkflowParser()
     wf = parser.parse_string(yaml)
     assert wf.jobs["dims"].strategy["matrix"]["dimension"] == ["novelty", "soundness"]
+
+
+def test_parse_job_env_coerces_to_string():
+    yaml = """
+name: t
+on: {workflow_dispatch: {}}
+jobs:
+  j:
+    runs-on: local
+    env:
+      PORT: 8080
+      DEBUG: true
+    steps: []
+"""
+    parser = WorkflowParser()
+    wf = parser.parse_string(yaml)
+    assert wf.jobs["j"].env["PORT"] == "8080"
+    assert wf.jobs["j"].env["DEBUG"] == "True"

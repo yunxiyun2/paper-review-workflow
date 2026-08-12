@@ -5,7 +5,7 @@ and push/PR/release/schedule triggers.
 """
 import yaml
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .models import WorkflowDef, JobDef, StepDef, TriggerDef
 
@@ -53,7 +53,7 @@ class WorkflowParser:
             env={k: str(v) for k, v in env.items()},
         )
 
-    def _parse_trigger(self, on_raw) -> TriggerDef:
+    def _parse_trigger(self, on_raw: object) -> TriggerDef:
         # Only workflow_dispatch supported
         if isinstance(on_raw, dict):
             wd = on_raw.get("workflow_dispatch")
@@ -76,7 +76,7 @@ class WorkflowParser:
             runs_on=raw.get("runs-on", "local"),
             steps=steps,
             needs=self._parse_needs(raw.get("needs")),
-            env=raw.get("env", {}) or {},
+            env={k: str(v) for k, v in (raw.get("env", {}) or {}).items()},
             outputs={k: str(v) for k, v in raw_outputs.items()},
             condition=raw.get("if"),
             strategy=raw.get("strategy"),
