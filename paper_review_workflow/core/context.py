@@ -19,12 +19,16 @@ class WorkflowContext:
 
     def build_context(self, job_instance: Optional[JobInstance] = None,
                       step_instance: Optional[StepInstance] = None) -> Dict[str, Any]:
+        jobs_ctx = {jid: {"outputs": j.outputs, "status": j.status.value, "result": j.status.value}
+                    for jid, j in self.run.jobs.items()}
         ctx: Dict[str, Any] = {
             "inputs": self.run.trigger_payload or {},
             "env": self.run.env or {},
             "workflow": {"name": self.run.workflow_def.name if self.run.workflow_def else ""},
-            "jobs": {jid: {"outputs": j.outputs, "status": j.status.value, "result": j.status.value}
-                     for jid, j in self.run.jobs.items()},
+            "jobs": jobs_ctx,
+            # `needs` is an alias for `jobs` — standard GitHub Actions syntax
+            # for referencing upstream job outputs (e.g. ${{ needs.extract.outputs.X }}).
+            "needs": jobs_ctx,
         }
         # Add matrix context from MATRIX_* env vars (injected by matrix executor
         # into the sub-job's job_def.env, not the workflow-level run.env)
