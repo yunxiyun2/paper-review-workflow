@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,8 @@ from ..core.models import (
 from .backend import StorageBackend
 
 logger = logging.getLogger(__name__)
+
+_SAFE_RUN_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 # -----------------------------------------------
@@ -194,6 +197,7 @@ class JsonFileStorage(StorageBackend):
     # -- Write operations --
 
     def save_run(self, run: WorkflowRun) -> None:
+        self._validate_run_id(run.id)
         data = _serialize_run(run)
         path = self._runs_dir / f"{run.id}.json"
         with self._lock:
@@ -206,19 +210,24 @@ class JsonFileStorage(StorageBackend):
         logger.debug(f"[JsonFileStorage] saved {run.id[:8]} -> {path.name}")
 
     def delete_run(self, run_id: str) -> bool:
+        self._validate_run_id(run_id)
         path = self._runs_dir / f"{run_id}.json"
+        file_existed = False
+        index_existed = False
         with self._lock:
             if path.exists():
                 path.unlink()
+                file_existed = True
             if run_id in self._index:
                 del self._index[run_id]
                 self._flush_index()
-                return True
-        return False
+                index_existed = True
+        return file_existed or index_existed
 
     # -- Read operations --
 
     def get_run(self, run_id: str) -> Optional[WorkflowRun]:
+        self._validate_run_id(run_id)
         path = self._runs_dir / f"{run_id}.json"
         if not path.exists():
             return None
@@ -284,6 +293,11 @@ class JsonFileStorage(StorageBackend):
 
     # -- Internal utilities --
 
+    def _validate_run_id(self, run_id: str) -> None:
+        """Raise ValueError if run_id contains path separators or traversal."""
+        if not run_id or not _SAFE_RUN_ID_RE.match(run_id):
+            raise ValueError(f"unsafe run_id: {run_id!r}")
+
     def _make_index_entry(self, run: WorkflowRun) -> Dict:
         return {
             "wf_name":   run.workflow_def.name if run.workflow_def else run.env.get("__workflow_name__", ""),
@@ -307,15 +321,15 @@ class JsonFileStorage(StorageBackend):
             try:
                 self._index = json.loads(self._index_file.read_text(encoding="utf-8"))
                 logger.debug(f"[JsonFileStorage] loaded index: {len(self._index)} records")
+                return
             except Exception as e:
-                logger.error(f"[JsonFileStorage] failed to load index: {e}")
-                self._index = {}
-        else:
-            self._index = {}
-            # Scan existing files to rebuild index
-            for f in self._runs_dir.glob("*.json"):
+                logger.error(f"[JsonFileStorage] corrupt index, rebuilding: {e}")
+        # Rebuild by scanning run files (also reached on corrupt index)
+        self._index = {}
+        if self._runs_dir.exists():
+            for path in self._runs_dir.glob("*.json"):
                 try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
+                    data = json.loads(path.read_text(encoding="utf-8"))
                     self._index[data["id"]] = {
                         "wf_name":    data.get("workflow_name", ""),
                         "status":     data.get("status", "unknown"),
@@ -324,9 +338,9 @@ class JsonFileStorage(StorageBackend):
                         "run_number": data.get("run_number", 1),
                     }
                 except Exception:
-                    pass
-            if self._index:
-                self._flush_index()
+                    continue
+        if self._index:
+            self._flush_index()
 
     def __repr__(self) -> str:
         return f"<JsonFileStorage dir={self._data_dir} runs={len(self._index)}>"

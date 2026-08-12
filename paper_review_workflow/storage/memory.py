@@ -67,7 +67,7 @@ class MemoryStorage(StorageBackend):
         offset:        int                      = 0,
     ) -> List[WorkflowRun]:
         with self._lock:
-            runs = list(self._store.values())
+            runs = [copy.deepcopy(r) for r in self._store.values()]
 
         # Filter
         if workflow_name:
@@ -102,7 +102,7 @@ class MemoryStorage(StorageBackend):
     def bulk_save(self, runs: List[WorkflowRun]) -> None:
         with self._lock:
             for run in runs:
-                self._store[run.id] = run
+                self._store[run.id] = copy.deepcopy(run)
 
     def all_run_ids(self) -> List[str]:
         """Return all run_ids (for debugging)."""

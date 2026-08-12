@@ -61,17 +61,31 @@ class StorageBackend(ABC):
         """
         run = self.get_run(run_id)
         if run:
-            self.save_run(run)
+            # Find the job key by matching job.id or job_def.id
+            job_key = None
+            for k, j in run.jobs.items():
+                if j.id == job.id or (j.job_def and job.job_def and j.job_def.id == job.job_def.id):
+                    job_key = k
+                    break
+            if job_key:
+                run.jobs[job_key] = job
+                self.save_run(run)
 
     def save_step_instance(self, run_id: str, job_id: str, step: StepInstance) -> None:
         """
         Persist only a single StepInstance (status / log / outputs / ...).
         Suitable for step status changes and log appends.
-        Default: read run from storage, full save.
+        Default: read run from storage, update step, full save.
         """
         run = self.get_run(run_id)
         if run:
-            self.save_run(run)
+            job = run.jobs.get(job_id)
+            if job:
+                for i, s in enumerate(job.steps):
+                    if s.id == step.id:
+                        job.steps[i] = step
+                        break
+                self.save_run(run)
 
     def flush_pending(self) -> None:
         """
