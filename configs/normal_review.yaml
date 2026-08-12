@@ -1,0 +1,93 @@
+name: normal-paper-review
+
+on:
+  workflow_dispatch:
+    inputs:
+      paper_source:
+        description: "论文来源(PDF 路径或 arXiv ID/URL)"
+        required: true
+        type: string
+      mode:
+        description: "评审模式"
+        type: choice
+        default: normal
+        options: [normal]
+
+env:
+  LLM_PROVIDER: anthropic
+  LLM_MODEL: claude-sonnet-4-6
+  LLM_MAX_TOKENS: "4096"
+  LLM_TEMPERATURE: "0.0"
+  SESSIONS_ROOT: ./sessions
+  WEIGHT_NOVELTY: "1.0"
+  WEIGHT_SOUNDESS: "1.2"
+  WEIGHT_SIGNIFICANCE: "1.2"
+  WEIGHT_CLARITY: "0.8"
+  WEIGHT_REPRODUCIBILITY: "1.0"
+  WEIGHT_RELATED_WORK: "0.8"
+  WEIGHT_POSITIONING: "0.8"
+  WEIGHT_PRESENTATION: "0.8"
+
+jobs:
+  extract:
+    name: "📄 论文抽取"
+    runs-on: local
+    outputs:
+      paper_id: ${{ steps.extract.outputs.paper_id }}
+      full_text_path: ${{ steps.extract.outputs.full_text_path }}
+      metadata_path: ${{ steps.extract.outputs.metadata_path }}
+      sections_path: ${{ steps.extract.outputs.sections_path }}
+      references_path: ${{ steps.extract.outputs.references_path }}
+    steps:
+      - id: extract
+        uses: paper-review/extract@v1
+        with:
+          source: ${{ inputs.paper_source }}
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+
+  dimensions:
+    name: "📊 维度打分"
+    needs: extract
+    strategy:
+      matrix:
+        dimension:
+          - novelty
+          - soundness
+          - significance
+          - clarity
+          - reproducibility
+          - related_work
+          - positioning
+          - presentation
+      max-parallel: 8
+    runs-on: local
+    steps:
+      - uses: paper-review/dim_score@v1
+        with:
+          dimension: ${{ matrix.dimension }}
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+          full_text_path: ${{ needs.extract.outputs.full_text_path }}
+          metadata_path: ${{ needs.extract.outputs.metadata_path }}
+
+  synthesize:
+    name: "📝 综合评审"
+    needs: dimensions
+    runs-on: local
+    outputs:
+      review_path: ${{ steps.synthesize.outputs.review_path }}
+      scores_path: ${{ steps.synthesize.outputs.scores_path }}
+    steps:
+      - id: synthesize
+        uses: paper-review/synthesize@v1
+        with:
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+
+  decide:
+    name: "🎯 推荐决定"
+    needs: synthesize
+    runs-on: local
+    steps:
+      - uses: paper-review/decide@v1
+        with:
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+          scores_path: ${{ needs.synthesize.outputs.scores_path }}
