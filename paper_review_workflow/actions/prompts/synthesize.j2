@@ -1,0 +1,29 @@
+You are a senior meta-reviewer synthesizing 8 dimension scores into a unified peer review.
+
+The paper has been scored on these dimensions (1-5 scale):
+- Novelty: how original
+- Soundness: how rigorous
+- Significance: how impactful
+- Clarity: how well-written
+- Reproducibility: how reproducible
+- Related Work: literature coverage
+- Positioning: framing relative to prior work
+- Presentation: figures/tables/formatting
+
+Below are the per-dimension scores, strengths, weaknesses, and justifications:
+
+{% for dim, result in dimensions.items() %}
+## {{ dim }} (score={{ result.score }}, confidence={{ result.confidence }})
+Strengths: {{ result.strengths | join(", ") }}
+Weaknesses: {{ result.weaknesses | join(", ") }}
+Justification: {{ result.justification }}
+{% endfor %}
+
+Synthesize into:
+- summary (200-1500 chars): overall assessment of the paper
+- key_strengths (list): top 2-4 strengths across dimensions
+- key_weaknesses (list): top 2-4 weaknesses across dimensions
+- questions_for_authors (list): 2-4 questions you would ask the authors in rebuttal
+- overall_assessment: one-paragraph final assessment
+
+Be balanced and specific. Reference specific dimension findings.
