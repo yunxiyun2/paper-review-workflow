@@ -4,6 +4,7 @@ import json
 import logging
 import signal
 import sys
+from typing import Optional, List
 
 from .engine import ReviewEngine
 from .storage import MemoryStorage, JsonFileStorage
@@ -67,40 +68,57 @@ def _cmd_show_run(engine: ReviewEngine, args) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: Optional[list] = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--storage", default="json", choices=["memory", "json"])
     common.add_argument("--storage-dir", default="./sessions")
     common.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
 
+    # For subparsers: use SUPPRESS defaults so global args set before the
+    # subcommand are not overwritten by the subparser's defaults.
+    common_sub = argparse.ArgumentParser(add_help=False)
+    common_sub.add_argument("--storage", default=argparse.SUPPRESS,
+                           choices=["memory", "json"])
+    common_sub.add_argument("--storage-dir", default=argparse.SUPPRESS)
+    common_sub.add_argument("--log-level", default=argparse.SUPPRESS,
+                            choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+
     parser = argparse.ArgumentParser(description="Paper review workflow",
                                      parents=[common])
     sub = parser.add_subparsers(dest="command")
 
     run_p = sub.add_parser("run", help="run a YAML review workflow",
-                           parents=[common])
+                           parents=[common_sub])
     run_p.add_argument("yaml")
     run_p.add_argument("--trigger", default="workflow_dispatch")
     run_p.add_argument("--payload", default="{}")
     run_p.add_argument("--env", action="append", default=[])
 
-    res_p = sub.add_parser("resume", help="resume a run", parents=[common])
+    res_p = sub.add_parser("resume", help="resume a run", parents=[common_sub])
     res_p.add_argument("run_id")
     res_p.add_argument("--rerun", default=None, help="comma-separated component names")
     res_p.add_argument("--rerun-all", action="store_true")
 
     list_p = sub.add_parser("list-runs", help="list historical runs",
-                            parents=[common])
+                            parents=[common_sub])
     list_p.add_argument("--paper-id", default=None)
     list_p.add_argument("--status", default=None,
                         choices=["pending", "running", "success", "failure", "cancelled"])
     list_p.add_argument("--limit", type=int, default=50)
 
-    show_p = sub.add_parser("show-run", help="show run details", parents=[common])
+    show_p = sub.add_parser("show-run", help="show run details", parents=[common_sub])
     show_p.add_argument("run_id")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    # Apply fallback defaults for global args when subparser used SUPPRESS
+    # (i.e., when the user did not pass them after the subcommand)
+    if not hasattr(args, "storage"):
+        args.storage = "json"
+    if not hasattr(args, "storage_dir"):
+        args.storage_dir = "./sessions"
+    if not hasattr(args, "log_level"):
+        args.log_level = "INFO"
     logging.basicConfig(level=args.log_level,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
