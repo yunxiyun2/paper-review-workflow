@@ -1,6 +1,7 @@
 """Built-in actions registration."""
 from .base import BaseAction, ActionResult
 from .registry import ActionRegistry
+from .extract import ExtractAction, register_extract_action
 
 
 class EchoAction(BaseAction):
@@ -17,3 +18,4 @@ class EchoAction(BaseAction):
 
 def register_builtin_actions(registry: ActionRegistry) -> None:
     registry.register("paper-review/echo@v1", EchoAction())
+    register_extract_action(registry)
