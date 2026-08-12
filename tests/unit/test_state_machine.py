@@ -88,3 +88,90 @@ def test_complete_job_idempotent():
     # Second call should not raise
     coord.complete_job("j1", job, success=True)
     assert job.status == JobStatus.SUCCESS
+
+
+def test_history_property_returns_copy():
+    """history property should return a list copy including the initial state."""
+    sm = WorkflowStateMachine(WorkflowStatus.PENDING)
+    sm.transition(WorkflowStatus.RUNNING)
+    h = sm.history
+    assert h[0] == WorkflowStatus.PENDING
+    assert h[-1] == WorkflowStatus.RUNNING
+    # Mutating returned list should not affect internal state
+    h.append("garbage")
+    assert len(sm.history) == 2
+
+
+def test_complete_workflow_idempotent_when_terminal():
+    """complete_workflow on terminal run should be a no-op."""
+    bus = EventBus()
+    run = WorkflowRun()
+    coord = WorkflowStateMachineCoordinator(run, bus)
+    coord.start_workflow()
+    coord.complete_workflow(success=True)
+    end_first = run.end_time
+    # Second call should not raise or update end_time
+    coord.complete_workflow(success=False)
+    assert run.end_time == end_first
+    assert run.status == WorkflowStatus.SUCCESS
+
+
+def test_cancel_workflow_idempotent_when_terminal():
+    """cancel_workflow on terminal run should be a no-op."""
+    bus = EventBus()
+    run = WorkflowRun()
+    coord = WorkflowStateMachineCoordinator(run, bus)
+    coord.start_workflow()
+    coord.complete_workflow(success=True)
+    end_first = run.end_time
+    # Cancel after terminal should not raise or change status
+    coord.cancel_workflow()
+    assert run.end_time == end_first
+    assert run.status == WorkflowStatus.SUCCESS
+
+
+def test_complete_job_creates_sm_when_missing():
+    """complete_job should create a SM if not previously tracked.
+
+    This branch fires when a job was loaded from storage (already RUNNING)
+    but has no SM in the coordinator (e.g., after resume).
+    """
+    bus = EventBus()
+    run = WorkflowRun()
+    coord = WorkflowStateMachineCoordinator(run, bus)
+    job = JobInstance()
+    job.status = JobStatus.RUNNING  # simulate in-flight job loaded from storage
+    # Don't call start_job -- complete_job should still work by creating SM
+    coord.complete_job("untracked", job, success=True)
+    assert job.status == JobStatus.SUCCESS
+    assert job.end_time is not None
+
+
+def test_complete_step_creates_sm_when_missing():
+    """complete_step should create a SM if not previously tracked.
+
+    This branch fires when a step was loaded from storage (already RUNNING)
+    but has no SM in the coordinator.
+    """
+    bus = EventBus()
+    run = WorkflowRun()
+    coord = WorkflowStateMachineCoordinator(run, bus)
+    step = StepInstance()
+    step.status = StepStatus.RUNNING  # simulate in-flight step loaded from storage
+    # Don't call start_step -- complete_step should still work by creating SM
+    coord.complete_step("j1", step, success=True)
+    assert step.status == StepStatus.SUCCESS
+    assert step.end_time is not None
+
+
+def test_skip_step_transitions_to_skipped():
+    """skip_step should set step status to SKIPPED and publish event."""
+    bus = EventBus()
+    run = WorkflowRun()
+    coord = WorkflowStateMachineCoordinator(run, bus)
+    step = StepInstance()
+    coord.skip_step("j1", step)
+    assert step.status == StepStatus.SKIPPED
+    # History should record the skipped transition
+    sm = coord._step_sms[step.id]
+    assert StepStatus.SKIPPED in sm.history

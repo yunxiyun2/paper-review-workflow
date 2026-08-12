@@ -150,3 +150,203 @@ def test_schema_validation_failure_raises(mock_cls):
     with pytest.raises(SchemaValidationError):
         p.complete(system="t", messages=[], model="m", max_tokens=10,
                    response_schema=DimensionScore)
+
+
+@patch("anthropic.Anthropic")
+def test_retry_on_500_then_success(mock_cls, monkeypatch):
+    """APIStatusError 500 should retry then succeed."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    mock_client = mock_cls.return_value
+    success_resp = _make_response([
+        _tool_use_block({
+            "score": 4, "confidence": 0.7,
+            "strengths": ["a"], "weaknesses": ["b"],
+            "justification": "x" * 200, "evidence": [],
+        })
+    ])
+    mock_client.messages.create.side_effect = [
+        anthropic.APIStatusError(
+            message="500", response=MagicMock(status_code=500), body=None
+        ),
+        success_resp,
+    ]
+    p = AnthropicProvider()
+    result = p.complete(
+        system="t", messages=[], model="m", max_tokens=10,
+        response_schema=DimensionScore,
+    )
+    assert mock_client.messages.create.call_count == 2
+    assert result.structured.score == 4
+
+
+@patch("anthropic.Anthropic")
+def test_500_exhausted_retries_raises(mock_cls, monkeypatch):
+    """APIStatusError 500 after all retries should re-raise."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    mock_client = mock_cls.return_value
+    mock_client.messages.create.side_effect = anthropic.APIStatusError(
+        message="500", response=MagicMock(status_code=500), body=None
+    )
+    p = AnthropicProvider()
+    with pytest.raises(anthropic.APIStatusError):
+        p.complete(
+            system="t", messages=[], model="m", max_tokens=10,
+            response_schema=DimensionScore,
+        )
+    assert mock_client.messages.create.call_count == 3
+
+
+@patch("anthropic.Anthropic")
+def test_400_non_context_length_raises_immediately(mock_cls, monkeypatch):
+    """400 that is NOT context_length should raise immediately (no retry)."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    mock_client = mock_cls.return_value
+    mock_client.messages.create.side_effect = anthropic.APIStatusError(
+        message="bad request", response=MagicMock(status_code=400), body=None
+    )
+    p = AnthropicProvider()
+    with pytest.raises(anthropic.APIStatusError):
+        p.complete(
+            system="t", messages=[], model="m", max_tokens=10,
+            response_schema=DimensionScore,
+        )
+    assert mock_client.messages.create.call_count == 1
+
+
+@patch("anthropic.Anthropic")
+def test_retry_on_api_connection_error_then_success(mock_cls, monkeypatch):
+    """APIConnectionError should retry then succeed."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    mock_client = mock_cls.return_value
+    success_resp = _make_response([
+        _tool_use_block({
+            "score": 3, "confidence": 0.5,
+            "strengths": ["a"], "weaknesses": ["b"],
+            "justification": "x" * 200, "evidence": [],
+        })
+    ])
+    mock_client.messages.create.side_effect = [
+        anthropic.APIConnectionError(
+            message="conn err", request=MagicMock()
+        ),
+        success_resp,
+    ]
+    p = AnthropicProvider()
+    result = p.complete(
+        system="t", messages=[], model="m", max_tokens=10,
+        response_schema=DimensionScore,
+    )
+    assert mock_client.messages.create.call_count == 2
+    assert result.structured.score == 3
+
+
+@patch("anthropic.Anthropic")
+def test_api_connection_error_exhausted_retries_raises(mock_cls, monkeypatch):
+    """APIConnectionError after all retries should re-raise."""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    mock_client = mock_cls.return_value
+    mock_client.messages.create.side_effect = anthropic.APIConnectionError(
+        message="conn err", request=MagicMock()
+    )
+    p = AnthropicProvider()
+    with pytest.raises(anthropic.APIConnectionError):
+        p.complete(
+            system="t", messages=[], model="m", max_tokens=10,
+            response_schema=DimensionScore,
+        )
+    assert mock_client.messages.create.call_count == 3
+
+
+@patch("anthropic.Anthropic")
+def test_build_system_blocks_with_list_system(mock_cls):
+    """When system is a list of blocks, it should be extended as-is."""
+    mock_client = mock_cls.return_value
+    mock_client.messages.create.return_value = _make_response([
+        _tool_use_block({
+            "score": 4, "confidence": 0.85,
+            "strengths": ["a"], "weaknesses": ["b"],
+            "justification": "x" * 200, "evidence": [],
+        })
+    ])
+    p = AnthropicProvider()
+    system_blocks_input = [{"type": "text", "text": "block1"}]
+    p.complete(
+        system=system_blocks_input,
+        messages=[{"role": "user", "content": "score"}],
+        model="claude-sonnet-4-6", max_tokens=100,
+        response_schema=DimensionScore,
+    )
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    system_blocks = call_kwargs["system"]
+    assert any(b.get("text") == "block1" for b in system_blocks)
+
+
+@patch("anthropic.Anthropic")
+def test_build_tools_returns_none_when_no_schema(mock_cls):
+    """When response_schema is None, tools/tool_choice should be None."""
+    mock_client = mock_cls.return_value
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "hello world"
+    mock_client.messages.create.return_value = _make_response([text_block])
+    p = AnthropicProvider()
+    result = p.complete(
+        system="t", messages=[], model="m", max_tokens=10,
+        response_schema=None,
+    )
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["tools"] is None
+    assert call_kwargs["tool_choice"] is None
+    assert result.text == "hello world"
+
+
+@patch("anthropic.Anthropic")
+def test_parse_response_no_tool_use_raises_schema_error(mock_cls):
+    """When schema is provided but no tool_use block in response, raise."""
+    mock_client = mock_cls.return_value
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "I cannot comply"
+    mock_client.messages.create.return_value = _make_response([text_block])
+    p = AnthropicProvider()
+    with pytest.raises(SchemaValidationError):
+        p.complete(
+            system="t", messages=[], model="m", max_tokens=10,
+            response_schema=DimensionScore,
+        )
+
+
+@patch("anthropic.Anthropic")
+def test_parse_response_text_when_no_schema(mock_cls):
+    """When response_schema is None, text content is joined and returned."""
+    mock_client = mock_cls.return_value
+    b1 = MagicMock()
+    b1.type = "text"
+    b1.text = "hello "
+    b2 = MagicMock()
+    b2.type = "text"
+    b2.text = "world"
+    mock_client.messages.create.return_value = _make_response([b1, b2])
+    p = AnthropicProvider()
+    result = p.complete(
+        system="t", messages=[], model="m", max_tokens=10,
+        response_schema=None,
+    )
+    assert result.text == "hello world"
+    assert result.structured is None
+
+
+@patch("anthropic.Anthropic")
+def test_parse_response_empty_text_returns_none(mock_cls):
+    """When response_schema is None and no text blocks, text should be None."""
+    mock_client = mock_cls.return_value
+    b1 = MagicMock()
+    b1.type = "tool_use"
+    b1.text = ""
+    mock_client.messages.create.return_value = _make_response([b1])
+    p = AnthropicProvider()
+    result = p.complete(
+        system="t", messages=[], model="m", max_tokens=10,
+        response_schema=None,
+    )
+    assert result.text is None

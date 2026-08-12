@@ -149,7 +149,8 @@ class DecideAction(BaseAction):
     def _extract_key_concerns(self, scores: dict) -> list:
         concerns = []
         for dim, data in scores.items():
-            if data.get("score", 5) <= 2:
+            score = data.get("score")
+            if score is not None and score <= 2:
                 weaknesses = data.get("weaknesses", [])
                 if weaknesses:
                     concerns.append(f"{dim}: {weaknesses[0]}")
@@ -158,7 +159,8 @@ class DecideAction(BaseAction):
     def _extract_key_strengths(self, scores: dict) -> list:
         strengths = []
         for dim, data in scores.items():
-            if data.get("score", 0) >= 4:
+            score = data.get("score")
+            if score is not None and score >= 4:
                 s = data.get("strengths", [])
                 if s:
                     strengths.append(f"{dim}: {s[0]}")
