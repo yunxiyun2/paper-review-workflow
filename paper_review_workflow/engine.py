@@ -4,7 +4,6 @@ from typing import Dict, List, Optional
 
 from .core.models import WorkflowRun, WorkflowStatus, JobStatus, StepStatus
 from .core.parser import WorkflowParser
-from .core.context import WorkflowContext
 from .core.event_bus import EventBus, WorkflowEvent, EventType
 from .core.state_machine import WorkflowStateMachineCoordinator
 from .actions.registry import ActionRegistry
@@ -30,6 +29,7 @@ class ReviewEngine:
         self._workflow_executor = WorkflowExecutor(
             registry=self.registry,
             event_bus=self.event_bus,
+            on_coordinator_created=self._on_coordinator_created,
         )
 
         register_builtin_actions(self.registry)
@@ -39,17 +39,22 @@ class ReviewEngine:
 
     def run_from_file(self, yaml_path: str,
                       trigger_type: str = "workflow_dispatch",
-                      payload: Optional[Dict] = None) -> WorkflowRun:
+                      payload: Optional[Dict] = None,
+                      extra_env: Optional[Dict[str, str]] = None) -> WorkflowRun:
         wf_def = self.parser.parse_file(yaml_path)
-        return self.run_workflow(wf_def, trigger_type, payload)
+        return self.run_workflow(wf_def, trigger_type, payload, extra_env=extra_env)
 
-    def run_workflow(self, wf_def, trigger_type="workflow_dispatch", payload=None):
+    def run_workflow(self, wf_def, trigger_type="workflow_dispatch", payload=None,
+                     extra_env: Optional[Dict[str, str]] = None):
         run = WorkflowRun(
             workflow_def=wf_def,
             trigger_type=trigger_type,
             trigger_payload=payload or {},
             env=dict(wf_def.env) if wf_def.env else {},
         )
+        # Apply CLI env overrides (take precedence over wf_def.env)
+        if extra_env:
+            run.env.update(extra_env)
         # Stash workflow file path for resume
         if wf_def.file_path:
             run.env["__workflow_file__"] = wf_def.file_path
@@ -108,6 +113,12 @@ class ReviewEngine:
         return self.storage.get_run(run_id)
 
     # -- Internal --
+
+    def _on_coordinator_created(self, run_id: str,
+                                coordinator: WorkflowStateMachineCoordinator) -> None:
+        """Called by WorkflowExecutor the moment a coordinator is created.
+        Allows cancel_run to find the coordinator during execution."""
+        self._coordinators[run_id] = coordinator
 
     def _do_execute(self, run: WorkflowRun) -> WorkflowRun:
         self._active_runs[run.id] = run

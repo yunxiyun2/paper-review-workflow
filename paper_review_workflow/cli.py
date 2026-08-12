@@ -22,7 +22,17 @@ def _cmd_run(engine: ReviewEngine, args) -> int:
     except json.JSONDecodeError as e:
         print(f"[Error] payload JSON parse failed: {e}", file=sys.stderr)
         return 2
-    run = engine.run_from_file(args.yaml, payload=payload)
+
+    # Parse --env KEY=VALUE overrides
+    extra_env: dict = {}
+    for kv in args.env or []:
+        if "=" not in kv:
+            print(f"[Error] invalid --env {kv}, expected KEY=VALUE", file=sys.stderr)
+            return 2
+        k, _, v = kv.partition("=")
+        extra_env[k] = v
+
+    run = engine.run_from_file(args.yaml, payload=payload, extra_env=extra_env)
     print(f"\n final status: {run.status.value}")
     if run.duration:
         print(f" total duration: {run.duration:.2f}s")
