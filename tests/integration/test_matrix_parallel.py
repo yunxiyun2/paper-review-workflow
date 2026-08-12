@@ -1,0 +1,179 @@
+"""M4.3: integration test verifying the 8 dimension calls happen in parallel.
+
+The matrix strategy in ``job_executor._execute_matrix`` submits all matrix
+combinations to a ``ThreadPoolExecutor(max_workers=max-parallel)``. This test
+asserts that behaviour end-to-end: a workflow with an 8-way ``matrix`` job must
+issue all 8 LLM calls within a single 0.5 s latency window. If the calls were
+serial we would observe ~4 s of wall time instead.
+
+The matrix executor injects ``MATRIX_<KEY>`` env vars into each sub-job (see
+``JobExecutor._execute_matrix_job``); the test action reads the dimension from
+``env["MATRIX_DIMENSION"]`` so it works without ``${{ }}`` substitution in
+``with`` params (the step executor does not yet resolve expressions in
+``with``).
+"""
+import time
+import pytest
+
+from paper_review_workflow.engine import ReviewEngine
+from paper_review_workflow.storage.memory import MemoryStorage
+from paper_review_workflow.actions.base import BaseAction, ActionResult
+
+
+class TimingDimensionAction(BaseAction):
+    """Stand-in for DimensionAction that records call times and sleeps.
+
+    Reads the dimension from the MATRIX_DIMENSION env var injected by the
+    matrix executor (avoids relying on ``${{ }}`` substitution in ``with``
+    params, which the step executor does not perform).
+    """
+
+    def __init__(self, call_times: list, sleep_seconds: float = 0.5):
+        self._call_times = call_times
+        self._sleep_seconds = sleep_seconds
+
+    @property
+    def description(self) -> str:
+        return "Timing stand-in for DimensionAction (matrix parallelism test)"
+
+    def run(self, params, env, context, log_callback=None):
+        dimension = env.get("MATRIX_DIMENSION")
+        if not dimension:
+            return ActionResult(success=False, message="MATRIX_DIMENSION env var not set")
+
+        # record start time, simulate LLM latency
+        self._call_times.append(time.time())
+        time.sleep(self._sleep_seconds)
+
+        if log_callback:
+            log_callback(f"[{dimension}] scored (mock)")
+
+        return ActionResult(
+            success=True,
+            outputs={
+                "score": 4,
+                "confidence": 0.8,
+                "dimension": dimension,
+            },
+            log_lines=[f"[{dimension}] score=4"],
+        )
+
+
+@pytest.fixture
+def fake_paper_session(tmp_path):
+    """Pre-create extract outputs so the dimensions job has inputs to read."""
+    session_dir = tmp_path / "session"
+    extract_dir = session_dir / "00_extract"
+    extract_dir.mkdir(parents=True)
+    (extract_dir / "full_text.md").write_text("# Paper\n\nContent. " * 50)
+    (extract_dir / "metadata.json").write_text('{"title":"T","authors":[],"abstract":""}')
+    return session_dir
+
+
+def test_8_dimensions_run_in_parallel(fake_paper_session, tmp_path):
+    """Verify 8 LLM calls happen in parallel, not serially.
+
+    With max-parallel=8 and a 0.5s simulated LLM latency per call:
+    - Parallel: all 8 calls start within ~0.5s (one sleep cycle)
+    - Serial: would take ~4s (8 * 0.5s)
+    """
+    call_times: list = []
+
+    # Register the timing action under the dim_score name so the workflow's
+    # `uses: paper-review/dim_score@v1` resolves to our stand-in.
+    from paper_review_workflow.actions.registry import ActionRegistry
+    ActionRegistry._instance = None
+
+    engine = ReviewEngine(storage=MemoryStorage())
+    engine.registry.register(
+        "paper-review/dim_score@v1",
+        TimingDimensionAction(call_times=call_times, sleep_seconds=0.5),
+    )
+
+    yaml = tmp_path / "test.yaml"
+    yaml.write_text(f"""
+name: parallel-test
+on: {{workflow_dispatch: {{}}}}
+env:
+  LLM_PROVIDER: anthropic
+  LLM_MODEL: test-model
+  SESSION_DIR: "{fake_paper_session}"
+jobs:
+  dimensions:
+    runs-on: local
+    strategy:
+      matrix:
+        dimension: [novelty, soundness, significance, clarity,
+                    reproducibility, related_work, positioning, presentation]
+      max-parallel: 8
+    steps:
+      - uses: paper-review/dim_score@v1
+        with:
+          session_dir: "${{ env.SESSION_DIR }}"
+""")
+
+    run = engine.run_from_file(str(yaml), payload={})
+
+    assert run.status.value == "success", (
+        f"workflow should succeed; got {run.status.value}"
+    )
+    assert len(call_times) == 8, (
+        f"expected 8 LLM calls, got {len(call_times)}"
+    )
+    # If parallel, all 8 calls start within ~0.5s (one sleep cycle).
+    # If serial, the spread would be ~4s.
+    elapsed = max(call_times) - min(call_times)
+    assert elapsed < 1.0, (
+        f"calls not parallel: elapsed={elapsed:.2f}s "
+        f"(parallel would be <0.5s, serial would be ~4s)"
+    )
+
+
+def test_dimensions_run_serially_when_max_parallel_is_1(fake_paper_session, tmp_path):
+    """Sanity check: with max-parallel=1, the same 8 calls are serial.
+
+    This validates that the parallel assertion in the test above is actually
+    detecting parallelism (not just fast execution).
+    """
+    call_times: list = []
+
+    from paper_review_workflow.actions.registry import ActionRegistry
+    ActionRegistry._instance = None
+
+    engine = ReviewEngine(storage=MemoryStorage())
+    engine.registry.register(
+        "paper-review/dim_score@v1",
+        TimingDimensionAction(call_times=call_times, sleep_seconds=0.3),
+    )
+
+    yaml = tmp_path / "test_serial.yaml"
+    yaml.write_text(f"""
+name: serial-test
+on: {{workflow_dispatch: {{}}}}
+env:
+  LLM_PROVIDER: anthropic
+  LLM_MODEL: test-model
+  SESSION_DIR: "{fake_paper_session}"
+jobs:
+  dimensions:
+    runs-on: local
+    strategy:
+      matrix:
+        dimension: [novelty, soundness, significance, clarity,
+                    reproducibility, related_work, positioning, presentation]
+      max-parallel: 1
+    steps:
+      - uses: paper-review/dim_score@v1
+        with:
+          session_dir: "${{ env.SESSION_DIR }}"
+""")
+
+    run = engine.run_from_file(str(yaml), payload={})
+
+    assert run.status.value == "success"
+    assert len(call_times) == 8
+    # With max-parallel=1, calls are serial: spread should be >= 7 * 0.3s
+    elapsed = max(call_times) - min(call_times)
+    assert elapsed >= 2.0, (
+        f"calls should be serial (>=2.0s spread), got {elapsed:.2f}s"
+    )
