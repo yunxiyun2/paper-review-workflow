@@ -74,3 +74,17 @@ def test_coordinator_start_and_complete_step():
     assert step.status == StepStatus.RUNNING
     coord.complete_step("j1", step, success=True)
     assert step.status == StepStatus.SUCCESS
+
+
+def test_complete_job_idempotent():
+    """Calling complete_job twice should be a no-op, not raise"""
+    from paper_review_workflow.core.event_bus import EventBus
+    bus = EventBus()
+    run = WorkflowRun()
+    coord = WorkflowStateMachineCoordinator(run, bus)
+    job = JobInstance()
+    coord.start_job("j1", job)
+    coord.complete_job("j1", job, success=True)
+    # Second call should not raise
+    coord.complete_job("j1", job, success=True)
+    assert job.status == JobStatus.SUCCESS

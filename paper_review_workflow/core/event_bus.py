@@ -2,14 +2,11 @@
 
 Ported from lwf, removed WAITING/RESUMED/RETRY events (no human approval).
 """
-import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set
-from weakref import WeakSet
+from typing import Any, Callable, Dict, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +104,6 @@ def make_step_log_event(run_id, job_id, step_id, line) -> WorkflowEvent:
 class EventBus:
     def __init__(self):
         self._subscribers: Set[Callable[[WorkflowEvent], None]] = set()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def subscribe(self, callback: Callable[[WorkflowEvent], None]) -> Callable[[], None]:
         self._subscribers.add(callback)
@@ -122,5 +118,3 @@ class EventBus:
             except Exception as e:
                 logger.error(f"[EventBus] subscriber error: {e}", exc_info=True)
 
-    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop

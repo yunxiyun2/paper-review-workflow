@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Callable, Dict, FrozenSet, Optional
+from typing import Dict, FrozenSet
 
 from .models import (
     WorkflowStatus, JobStatus, StepStatus,
@@ -130,6 +130,8 @@ class WorkflowStateMachineCoordinator:
         self.event_bus.publish(make_workflow_started_event(self.run))
 
     def complete_workflow(self, success: bool) -> None:
+        if self.workflow_sm.is_terminal:
+            return
         target = WorkflowStatus.SUCCESS if success else WorkflowStatus.FAILURE
         self.workflow_sm.transition(target)
         self.run.status = target
@@ -157,6 +159,8 @@ class WorkflowStateMachineCoordinator:
 
     def complete_job(self, job_id: str, job: JobInstance, success: bool) -> None:
         sm = self._job_sms.get(job_id)
+        if sm and sm.is_terminal:
+            return
         if sm is None:
             sm = JobStateMachine(job.status)
             self._job_sms[job_id] = sm
@@ -167,7 +171,7 @@ class WorkflowStateMachineCoordinator:
         self.event_bus.publish(make_job_completed_event(self.run.id, job))
 
     def skip_job(self, job_id: str, job: JobInstance) -> None:
-        sm = JobStateMachine(job.status)
+        sm = self._job_sms.get(job_id) or JobStateMachine(job.status)
         self._job_sms[job_id] = sm
         sm.transition(JobStatus.SKIPPED)
         job.status = JobStatus.SKIPPED
@@ -193,8 +197,12 @@ class WorkflowStateMachineCoordinator:
         self.event_bus.publish(make_step_started_event(self.run.id, job_id, step))
 
     def complete_step(self, job_id: str, step: StepInstance, success: bool) -> None:
-        sm = self._step_sms.get(step.id) or StepStateMachine(step.status)
-        self._step_sms[step.id] = sm
+        sm = self._step_sms.get(step.id)
+        if sm and sm.is_terminal:
+            return
+        if sm is None:
+            sm = StepStateMachine(step.status)
+            self._step_sms[step.id] = sm
         target = StepStatus.SUCCESS if success else StepStatus.FAILURE
         sm.transition(target)
         step.status = target
@@ -202,7 +210,7 @@ class WorkflowStateMachineCoordinator:
         self.event_bus.publish(make_step_completed_event(self.run.id, job_id, step))
 
     def skip_step(self, job_id: str, step: StepInstance) -> None:
-        sm = StepStateMachine(step.status)
+        sm = self._step_sms.get(step.id) or StepStateMachine(step.status)
         self._step_sms[step.id] = sm
         sm.transition(StepStatus.SKIPPED)
         step.status = StepStatus.SKIPPED
@@ -219,8 +227,8 @@ class WorkflowStateMachineCoordinator:
 
     def cancel_all_pending_jobs_and_steps(self) -> None:
         for job_id, job in self.run.jobs.items():
-            if not JOB_TERMINAL.__contains__(job.status):
+            if job.status not in JOB_TERMINAL:
                 self.cancel_job(job_id, job)
             for step in job.steps:
-                if not STEP_TERMINAL.__contains__(step.status):
+                if step.status not in STEP_TERMINAL:
                     self.cancel_step(job_id, step)
