@@ -17,8 +17,8 @@ def test_paper_id_different_titles():
 
 def test_run_id_format():
     rid = generate_run_id()
-    # 20260812-143022-a1b2
-    assert len(rid) == 20
+    # 20260812-143022-a1b2c3d4 (8 hex chars suffix for collision resistance)
+    assert len(rid) == 24
     assert rid[8] == "-"
     assert rid[15] == "-"
 

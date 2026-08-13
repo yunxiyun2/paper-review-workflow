@@ -11,9 +11,9 @@ def generate_paper_id(title: str) -> str:
 
 
 def generate_run_id() -> str:
-    """Format: YYYYMMDD-HHMMSS-xxxx (4 hex chars)."""
+    """Format: YYYYMMDD-HHMMSS-xxxxxxxx (8 hex chars for collision resistance)."""
     ts = time.strftime("%Y%m%d-%H%M%S")
-    suffix = secrets.token_hex(2)
+    suffix = secrets.token_hex(4)
     return f"{ts}-{suffix}"
 
 
