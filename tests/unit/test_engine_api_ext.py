@@ -145,3 +145,66 @@ def test_recover_interrupted_runs_all_terminal(engine, tmp_path):
     engine = ReviewEngine(storage=JsonFileStorage(data_dir=str(tmp_path)))
     recovered = engine.recover_interrupted_runs()
     assert recovered == 0
+
+
+def test_dispatch_workflow_creates_pending_run_without_executing(engine, configs_dir):
+    """dispatch_workflow must create PENDING run in storage but NOT execute."""
+    engine.load_workflow_directory(configs_dir)
+
+    run = engine.dispatch_workflow("wf-one", inputs={"msg": "hi"})
+    assert run.status == WorkflowStatus.PENDING
+    assert run.trigger_payload == {"inputs": {"msg": "hi"}}
+    assert run.env["__workflow_name__"] == "wf-one"
+    # Verify saved to storage
+    loaded = engine.storage.get_run(run.id)
+    assert loaded is not None
+    assert loaded.status == WorkflowStatus.PENDING
+
+
+def test_dispatch_workflow_unknown_raises(engine):
+    with pytest.raises(ValueError, match="workflow not registered"):
+        engine.dispatch_workflow("nonexistent", inputs={})
+
+
+def test_dispatch_workflow_stores_file_path(engine, configs_dir):
+    """dispatch_workflow stores __workflow_file__ for later reload by execute_existing_run"""
+    engine.load_workflow_directory(configs_dir)
+    run = engine.dispatch_workflow("wf-one", inputs={})
+    assert "__workflow_file__" in run.env
+    assert run.env["__workflow_file__"].endswith("wf1.yaml")
+
+
+def test_execute_existing_run_loads_and_executes(engine, configs_dir):
+    """execute_existing_run loads a run from storage and runs it."""
+    engine.load_workflow_directory(configs_dir)
+
+    # Dispatch a run (PENDING, not executed)
+    run = engine.dispatch_workflow("wf-one", inputs={})
+    assert run.status == WorkflowStatus.PENDING
+
+    # Execute it
+    executed = engine.execute_existing_run(run.id)
+    assert executed.status == WorkflowStatus.SUCCESS
+    # Verify step output persisted
+    assert "j" in executed.jobs
+    assert executed.jobs["j"].status.value == "success"
+
+
+def test_execute_existing_run_unknown_id_raises(engine):
+    with pytest.raises(ValueError, match="run not found"):
+        engine.execute_existing_run("nonexistent-run-id")
+
+
+def test_execute_existing_run_reloads_workflow_def_from_env(engine, configs_dir, tmp_path):
+    """execute_existing_run reloads workflow_def from __workflow_file__ if None"""
+    engine.load_workflow_directory(configs_dir)
+    # Create a run, then null out workflow_def (simulate reload from storage)
+    run = engine.dispatch_workflow("wf-one", inputs={})
+    run.workflow_def = None
+    engine.storage.save_run(run)
+
+    # Create a NEW engine (simulates fresh process)
+    engine2 = ReviewEngine(storage=engine.storage)
+    engine2.load_workflow_directory(configs_dir)
+    executed = engine2.execute_existing_run(run.id)
+    assert executed.status == WorkflowStatus.SUCCESS

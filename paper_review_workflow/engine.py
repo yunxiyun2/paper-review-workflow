@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .core.models import WorkflowRun, WorkflowStatus, JobStatus, StepStatus, WorkflowDef
 from .core.parser import WorkflowParser
@@ -176,6 +176,40 @@ class ReviewEngine:
                 recovered += 1
                 logger.info(f"[Engine] recovered run {run.id[:8]} -> cancelled")
         return recovered
+
+    def dispatch_workflow(self, workflow_name: str, inputs: Dict[str, Any]) -> WorkflowRun:
+        """Create a PENDING run for the named workflow and save to storage. Does NOT execute.
+
+        Used by POST /api/runs endpoint. Actual execution is triggered by caller
+        via execute_existing_run (typically in a background task).
+        """
+        wf_def = self.get_workflow_def(workflow_name)
+        if wf_def is None:
+            raise ValueError(f"workflow not registered: {workflow_name}")
+        run = WorkflowRun(
+            workflow_def=wf_def,
+            trigger_type="workflow_dispatch",
+            trigger_payload={"inputs": inputs},
+            env=dict(wf_def.env) if wf_def.env else {},
+        )
+        if wf_def.file_path:
+            run.env["__workflow_file__"] = wf_def.file_path
+        run.env["__workflow_name__"] = wf_def.name
+        self.storage.save_run(run)
+        self.event_bus.publish(WorkflowEvent(
+            event_type=EventType.WORKFLOW_CREATED, run_id=run.id,
+            data={"workflow_name": wf_def.name, "trigger_type": "workflow_dispatch"},
+        ))
+        return run
+
+    def execute_existing_run(self, run_id: str) -> WorkflowRun:
+        """Load a run from storage and execute it. Used by background tasks."""
+        run = self.storage.get_run(run_id)
+        if run is None:
+            raise ValueError(f"run not found: {run_id}")
+        if run.workflow_def is None and run.env.get("__workflow_file__"):
+            run.workflow_def = self.parser.parse_file(run.env["__workflow_file__"])
+        return self._do_execute(run)
 
     # -- Internal --
 
