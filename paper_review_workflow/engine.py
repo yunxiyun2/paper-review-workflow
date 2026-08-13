@@ -1,8 +1,9 @@
 """ReviewEngine: facade layer (simplified from lwf WorkflowEngine)."""
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional
 
-from .core.models import WorkflowRun, WorkflowStatus, JobStatus, StepStatus
+from .core.models import WorkflowRun, WorkflowStatus, JobStatus, StepStatus, WorkflowDef
 from .core.parser import WorkflowParser
 from .core.event_bus import EventBus, WorkflowEvent, EventType
 from .core.state_machine import WorkflowStateMachineCoordinator
@@ -25,6 +26,7 @@ class ReviewEngine:
 
         self._active_runs: Dict[str, WorkflowRun] = {}
         self._coordinators: Dict[str, WorkflowStateMachineCoordinator] = {}
+        self._workflow_defs: Dict[str, WorkflowDef] = {}
 
         self._workflow_executor = WorkflowExecutor(
             registry=self.registry,
@@ -117,6 +119,45 @@ class ReviewEngine:
 
     def get_run(self, run_id: str):
         return self.storage.get_run(run_id)
+
+    # -- Workflow definition management (Phase 2 #5) --
+
+    def load_workflow_directory(self, configs_dir: str) -> Dict[str, WorkflowDef]:
+        """Scan directory for *.yaml/*.yml files and register them. Returns {name: WorkflowDef}."""
+        path = Path(configs_dir)
+        if not path.exists():
+            logger.warning(f"[Engine] configs dir not found: {configs_dir}")
+            return {}
+        loaded = {}
+        for yml_file in sorted(path.glob("**/*.y*ml")):
+            try:
+                wf_def = self.parser.parse_file(str(yml_file))
+                self._register_workflow_def(wf_def)
+                loaded[wf_def.name] = wf_def
+                logger.info(f"[Engine] loaded workflow: {wf_def.name} ({yml_file})")
+            except Exception as e:
+                logger.warning(f"[Engine] failed to load {yml_file}: {e}")
+        return loaded
+
+    def register_workflow(self, yaml_content: str, name: Optional[str] = None) -> WorkflowDef:
+        """Dynamically register a YAML workflow (used by POST /api/workflows/register)."""
+        wf_def = self.parser.parse_string(yaml_content)
+        if name:
+            wf_def.name = name
+        self._register_workflow_def(wf_def)
+        return wf_def
+
+    def _register_workflow_def(self, wf_def: WorkflowDef) -> None:
+        """Register a workflow definition (overwrites same-name)."""
+        self._workflow_defs[wf_def.name] = wf_def
+
+    def get_workflow_defs(self) -> Dict[str, WorkflowDef]:
+        """Return all registered workflow definitions."""
+        return dict(self._workflow_defs)
+
+    def get_workflow_def(self, name: str) -> Optional[WorkflowDef]:
+        """Look up a workflow by name."""
+        return self._workflow_defs.get(name)
 
     # -- Internal --
 
