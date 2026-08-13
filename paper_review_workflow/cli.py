@@ -68,6 +68,47 @@ def _cmd_show_run(engine: ReviewEngine, args) -> int:
     return 0
 
 
+def _cmd_server(args) -> int:
+    """启动 FastAPI 服务器"""
+    import os
+
+    if args.configs_dir:
+        os.environ["PAPER_REVIEW_CONFIGS_DIR"] = args.configs_dir
+
+    try:
+        import uvicorn
+    except ImportError:
+        print("[Error] uvicorn not installed. Run: pip install uvicorn[standard]",
+              file=sys.stderr)
+        return 3
+
+    from .api import create_app
+
+    app = create_app(
+        storage=_build_storage(args),
+        sessions_root=args.storage_dir,
+        configs_dir=args.configs_dir or os.environ.get(
+            "PAPER_REVIEW_CONFIGS_DIR", "./configs"),
+    )
+
+    print(f"""
+╔══════════════════════════════════════════════════════╗
+║  Paper Review Workflow API Server                    ║
+║                                                      ║
+║  API docs:  http://{args.host}:{args.port}/docs      ║
+║  WebSocket: ws://{args.host}:{args.port}/ws          ║
+║  Health:    http://{args.host}:{args.port}/api/health║
+╚══════════════════════════════════════════════════════╝
+""")
+
+    try:
+        uvicorn.run(app, host=args.host, port=args.port,
+                    log_level=args.log_level.lower())
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
 def main(argv: Optional[list] = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--storage", default="json", choices=["memory", "json"])
@@ -110,6 +151,15 @@ def main(argv: Optional[list] = None) -> int:
     show_p = sub.add_parser("show-run", help="show run details", parents=[common_sub])
     show_p.add_argument("run_id")
 
+    # ── server 子命令 (Phase 2 #5) ──
+    server_p = sub.add_parser("server", help="启动 FastAPI 服务器",
+                               parents=[common_sub])
+    server_p.add_argument("--host", default="127.0.0.1", help="监听地址")
+    server_p.add_argument("--port", type=int, default=8000, help="监听端口")
+    server_p.add_argument("--reload", action="store_true", help="开发模式自动重载")
+    server_p.add_argument("--configs-dir", default=None,
+                          help="configs/ 目录路径(默认 PAPER_REVIEW_CONFIGS_DIR 或 ./configs)")
+
     args = parser.parse_args(argv)
     # Apply fallback defaults for global args when subparser used SUPPRESS
     # (i.e., when the user did not pass them after the subcommand)
@@ -119,13 +169,26 @@ def main(argv: Optional[list] = None) -> int:
         args.storage_dir = "./sessions"
     if not hasattr(args, "log_level"):
         args.log_level = "INFO"
+    # Apply fallback defaults for server subcommand args when no subcommand
+    # is given (default-to-server behavior needs these to exist on args)
+    if not hasattr(args, "host"):
+        args.host = "127.0.0.1"
+    if not hasattr(args, "port"):
+        args.port = 8000
+    if not hasattr(args, "reload"):
+        args.reload = False
+    if not hasattr(args, "configs_dir"):
+        args.configs_dir = None
     logging.basicConfig(level=args.log_level,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
 
+    if args.command == "server":
+        return _cmd_server(args)
+
     if args.command is None:
-        parser.print_help()
-        return 0
+        # ★ 默认启动 server (与 lwf 一致)
+        return _cmd_server(args)
 
     engine = ReviewEngine(storage=_build_storage(args),
                           sessions_root=args.storage_dir)
