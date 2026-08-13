@@ -230,6 +230,28 @@ def create_app(
             },
         }
 
+    # -- WebSocket endpoints --
+    @app.websocket("/ws")
+    async def websocket_global(websocket: WebSocket):
+        """Global WebSocket — receives all EventBus events."""
+        await ws_manager.add_connection(websocket)
+        try:
+            # Send historical events for catch-up
+            await ws_manager.send_history(websocket)
+            while True:
+                try:
+                    data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                    if data == "ping":
+                        await websocket.send_text('{"event": "pong"}')
+                except asyncio.TimeoutError:
+                    await websocket.send_text('{"event": "heartbeat"}')
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error(f"[WS /ws] error: {e}")
+        finally:
+            ws_manager.remove_connection(websocket)
+
     # Other endpoints added in subsequent tasks
     return app
 
