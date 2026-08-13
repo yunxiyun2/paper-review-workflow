@@ -153,7 +153,7 @@ def test_dispatch_workflow_creates_pending_run_without_executing(engine, configs
 
     run = engine.dispatch_workflow("wf-one", inputs={"msg": "hi"})
     assert run.status == WorkflowStatus.PENDING
-    assert run.trigger_payload == {"inputs": {"msg": "hi"}}
+    assert run.trigger_payload == {"msg": "hi"}
     assert run.env["__workflow_name__"] == "wf-one"
     # Verify saved to storage
     loaded = engine.storage.get_run(run.id)

@@ -189,7 +189,7 @@ class ReviewEngine:
         run = WorkflowRun(
             workflow_def=wf_def,
             trigger_type="workflow_dispatch",
-            trigger_payload={"inputs": inputs},
+            trigger_payload=inputs or {},
             env=dict(wf_def.env) if wf_def.env else {},
         )
         if wf_def.file_path:

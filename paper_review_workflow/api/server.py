@@ -148,6 +148,61 @@ def create_app(
             "message": "review dispatched, see GET /api/runs/{run_id} for status",
         }
 
+    @app.get("/api/runs")
+    async def list_runs(
+        status: Optional[str] = Query(None),
+        limit: int = Query(50, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+    ):
+        status_enum = WorkflowStatus(status) if status else None
+        runs = engine.storage.list_runs(status=status_enum, limit=limit + offset)
+        runs = runs[offset:offset + limit]
+        return {
+            "total": len(runs),
+            "runs": [_serialize_run_brief(r) for r in runs],
+        }
+
+    @app.get("/api/runs/{run_id}", response_model=RunResponse)
+    async def get_run(run_id: str):
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        return _serialize_run_full(run)
+
+    def _serialize_run_brief(run: WorkflowRun) -> dict:
+        return {
+            "run_id": run.id,
+            "workflow_name": run.workflow_def.name if run.workflow_def else "",
+            "status": run.status.value,
+            "start_time": run.start_time.isoformat() if run.start_time else None,
+            "end_time": run.end_time.isoformat() if run.end_time else None,
+            "duration": run.duration,
+            "jobs": {jid: {"status": j.status.value} for jid, j in run.jobs.items()},
+        }
+
+    def _serialize_run_full(run: WorkflowRun) -> dict:
+        return {
+            "run_id": run.id,
+            "workflow_name": run.workflow_def.name if run.workflow_def else "",
+            "status": run.status.value,
+            "start_time": run.start_time.isoformat() if run.start_time else None,
+            "end_time": run.end_time.isoformat() if run.end_time else None,
+            "duration": run.duration,
+            "jobs": {
+                jid: {
+                    "status": j.status.value,
+                    "outputs": j.outputs,
+                    "duration": j.duration,
+                    "steps": [
+                        {"id": s.id, "name": s.step_def.name if s.step_def else "",
+                         "status": s.status.value, "outputs": s.outputs}
+                        for s in j.steps
+                    ],
+                }
+                for jid, j in run.jobs.items()
+            },
+        }
+
     # Other endpoints added in subsequent tasks
     return app
 

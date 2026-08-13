@@ -174,3 +174,102 @@ def mock_llm(monkeypatch):
         mock_client.complete.side_effect = side_effect
         mock_from_env.return_value = mock_client
         yield mock_client
+
+
+# ── GET /api/runs (list) + GET /api/runs/{id} tests (M4.6) ──────────
+
+import time
+
+
+def test_list_runs_empty(client):
+    r = client.get("/api/runs")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 0
+    assert data["runs"] == []
+
+
+def test_list_runs_after_dispatch(client, mock_llm):
+    # Dispatch a run
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    # Wait for it to complete (or fail)
+    for _ in range(60):
+        r = client.get(f"/api/runs/{run_id}")
+        if r.json()["status"] in ("success", "failure", "cancelled"):
+            break
+        time.sleep(0.5)
+    # List runs
+    r = client.get("/api/runs")
+    data = r.json()
+    assert data["total"] >= 1
+    assert any(r["run_id"] == run_id for r in data["runs"])
+
+
+def test_get_run_returns_jobs_status(client, mock_llm):
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    # Wait for completion
+    for _ in range(60):
+        r = client.get(f"/api/runs/{run_id}")
+        if r.json()["status"] in ("success", "failure", "cancelled"):
+            break
+        time.sleep(0.5)
+    r = client.get(f"/api/runs/{run_id}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["run_id"] == run_id
+    assert data["status"] == "success"
+    assert "extract" in data["jobs"]
+    assert "decide" in data["jobs"]
+
+
+def test_get_run_nonexistent_returns_404(client):
+    r = client.get("/api/runs/nonexistent-id")
+    assert r.status_code == 404
+
+
+def test_list_runs_filter_by_status(client, mock_llm):
+    # Dispatch a run that will succeed
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    for _ in range(60):
+        r = client.get(f"/api/runs/{run_id}")
+        if r.json()["status"] in ("success", "failure", "cancelled"):
+            break
+        time.sleep(0.5)
+    # Filter by success
+    r = client.get("/api/runs?status=success")
+    data = r.json()
+    assert all(r["status"] == "success" for r in data["runs"])
+
+
+def test_list_runs_pagination(client, mock_llm):
+    # Dispatch 3 runs
+    run_ids = []
+    for _ in range(3):
+        r = client.post("/api/runs", json={
+            "workflow_name": "normal-paper-review",
+            "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        })
+        run_ids.append(r.json()["run_id"])
+    # Wait for all to complete
+    for rid in run_ids:
+        for _ in range(60):
+            r = client.get(f"/api/runs/{rid}")
+            if r.json()["status"] in ("success", "failure", "cancelled"):
+                break
+            time.sleep(0.5)
+    # Test pagination
+    r = client.get("/api/runs?limit=2")
+    data = r.json()
+    assert len(data["runs"]) <= 2
