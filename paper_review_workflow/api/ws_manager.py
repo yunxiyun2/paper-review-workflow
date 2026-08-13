@@ -89,3 +89,34 @@ class WSManager:
                 await ws.send_text(evt.to_json())
             except Exception:
                 break
+
+
+class FilteredWS:
+    """Wrapper for WebSocket that only sends events matching a target run_id.
+
+    Used by /ws/runs/{run_id} endpoint to filter global events to a single run.
+    Heartbeat/pong/non-JSON messages pass through unconditionally.
+    """
+
+    def __init__(self, ws, target_run_id: str):
+        self._ws = ws
+        self._run_id = target_run_id
+
+    async def send_text(self, message: str) -> None:
+        try:
+            data = json.loads(message)
+            if (data.get("run_id") == self._run_id
+                or data.get("event") in ("heartbeat", "pong")):
+                await self._ws.send_text(message)
+        except (json.JSONDecodeError, AttributeError):
+            await self._ws.send_text(message)
+
+    async def accept(self) -> None:
+        await self._ws.accept()
+
+    async def close(self) -> None:
+        await self._ws.close()
+
+    # Delegate attribute access for any other WebSocket methods
+    def __getattr__(self, name):
+        return getattr(self._ws, name)

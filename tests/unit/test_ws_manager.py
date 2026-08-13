@@ -126,3 +126,60 @@ def test_wsmanager_send_history_filtered_by_run_id():
     asyncio.run(mgr.send_history(ws, run_id="r1"))
     # only r1 events sent (2 of them)
     assert ws.send_text.call_count == 2
+
+
+from paper_review_workflow.api.ws_manager import FilteredWS
+
+
+def test_filteredws_only_sends_matching_run_id():
+    target = AsyncMock()
+    filtered = FilteredWS(target, "run-123")
+
+    # matching run_id
+    asyncio.run(filtered.send_text(json.dumps({
+        "run_id": "run-123", "event": "step.completed", "data": {}
+    })))
+    target.send_text.assert_called_once()
+
+    # non-matching run_id — should NOT send
+    target.reset_mock()
+    asyncio.run(filtered.send_text(json.dumps({
+        "run_id": "run-456", "event": "step.completed", "data": {}
+    })))
+    target.send_text.assert_not_called()
+
+
+def test_filteredws_passes_heartbeat_and_pong():
+    target = AsyncMock()
+    filtered = FilteredWS(target, "run-123")
+
+    # heartbeat should always pass
+    asyncio.run(filtered.send_text(json.dumps({"event": "heartbeat"})))
+    target.send_text.assert_called_once()
+
+    # pong should always pass
+    target.reset_mock()
+    asyncio.run(filtered.send_text(json.dumps({"event": "pong"})))
+    target.send_text.assert_called_once()
+
+
+def test_filteredws_passes_non_json_through():
+    """Non-JSON messages should pass through (e.g. raw text errors)"""
+    target = AsyncMock()
+    filtered = FilteredWS(target, "run-123")
+    asyncio.run(filtered.send_text("raw text message"))
+    target.send_text.assert_called_once_with("raw text message")
+
+
+def test_filteredws_close_delegates_to_target():
+    target = AsyncMock()
+    filtered = FilteredWS(target, "run-123")
+    asyncio.run(filtered.close())
+    target.close.assert_called_once()
+
+
+def test_filteredws_accept_delegates_to_target():
+    target = AsyncMock()
+    filtered = FilteredWS(target, "run-123")
+    asyncio.run(filtered.accept())
+    target.accept.assert_called_once()
