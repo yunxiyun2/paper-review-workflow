@@ -32,6 +32,43 @@ python main.py run configs/normal_review.yaml \
     --payload '{"paper_source": "/path/to/paper.pdf"}'
 ```
 
+## API Server Mode
+
+Start the FastAPI HTTP API + WebSocket server:
+
+```bash
+# Default (no subcommand starts server)
+python main.py
+
+# Explicit
+python main.py server --host 0.0.0.0 --port 8000
+
+# Dev mode with auto-reload
+python main.py server --reload
+```
+
+API docs at `http://localhost:8000/docs`. Key endpoints:
+
+- `GET /api/health` — health check
+- `GET /api/workflows` — list registered workflows
+- `POST /api/workflows/register` — register a YAML workflow
+- `POST /api/runs` — dispatch a review (returns run_id immediately)
+- `GET /api/runs/{run_id}` — get run status
+- `POST /api/runs/{run_id}/cancel` — cancel a run
+- `POST /api/runs/{run_id}/resume` — resume a failed/interrupted run
+
+WebSocket endpoints:
+- `ws://localhost:8000/ws` — all events
+- `ws://localhost:8000/ws/runs/{run_id}` — filtered to single run
+
+Example: dispatch a review via curl:
+
+```bash
+curl -X POST http://localhost:8000/api/runs \
+  -H "Content-Type: application/json" \
+  -d '{"workflow_name": "normal-paper-review", "inputs": {"paper_source": "2402.12098"}}'
+```
+
 ## Output Structure
 
 Each run creates a session directory:
