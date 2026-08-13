@@ -273,3 +273,80 @@ def test_list_runs_pagination(client, mock_llm):
     r = client.get("/api/runs?limit=2")
     data = r.json()
     assert len(data["runs"]) <= 2
+
+
+# ── POST /api/runs/{id}/cancel + resume tests (M4.7) ───────────────
+
+
+def test_cancel_run_returns_200(client, mock_llm):
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    # Wait briefly to ensure it's running or queued
+    time.sleep(0.3)
+    r = client.post(f"/api/runs/{run_id}/cancel")
+    assert r.status_code == 200
+    assert r.json()["run_id"] == run_id
+
+
+def test_cancel_nonexistent_returns_404(client):
+    r = client.post("/api/runs/nonexistent/cancel")
+    assert r.status_code == 404
+
+
+def test_resume_run_after_completion(client, mock_llm):
+    # First dispatch
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    # Wait for it to finish
+    for _ in range(60):
+        r = client.get(f"/api/runs/{run_id}")
+        if r.json()["status"] in ("success", "failure", "cancelled"):
+            break
+        time.sleep(0.5)
+    # Resume it (should be safe even if already done)
+    r = client.post(f"/api/runs/{run_id}/resume", json={})
+    assert r.status_code == 200
+    assert r.json()["run_id"] == run_id
+
+
+def test_resume_with_rerun_components(client, mock_llm):
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    for _ in range(60):
+        r = client.get(f"/api/runs/{run_id}")
+        if r.json()["status"] in ("success", "failure", "cancelled"):
+            break
+        time.sleep(0.5)
+    r = client.post(f"/api/runs/{run_id}/resume", json={
+        "rerun_components": ["dimensions_novelty"]
+    })
+    assert r.status_code == 200
+
+
+def test_resume_nonexistent_returns_404(client):
+    r = client.post("/api/runs/nonexistent/resume", json={})
+    assert r.status_code == 404
+
+
+def test_resume_rerun_all(client, mock_llm):
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+    for _ in range(60):
+        r = client.get(f"/api/runs/{run_id}")
+        if r.json()["status"] in ("success", "failure", "cancelled"):
+            break
+        time.sleep(0.5)
+    r = client.post(f"/api/runs/{run_id}/resume", json={"rerun_all": True})
+    assert r.status_code == 200

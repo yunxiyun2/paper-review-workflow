@@ -169,6 +169,33 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
         return _serialize_run_full(run)
 
+    @app.post("/api/runs/{run_id}/cancel")
+    async def cancel_run(run_id: str):
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        cancelled = engine.cancel_run(run_id)
+        if not cancelled:
+            # Already terminal — return current status
+            run = engine.storage.get_run(run_id)
+            return {"run_id": run_id, "status": run.status.value, "message": "run already terminal"}
+        return {"run_id": run_id, "status": "cancelled", "message": "cancellation requested"}
+
+    @app.post("/api/runs/{run_id}/resume")
+    async def resume_run(run_id: str, req: ResumeRequest, background_tasks: BackgroundTasks):
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+
+        # Apply rerun options
+        if req.rerun_all:
+            engine._reset_all_components(run)
+        elif req.rerun_components:
+            engine._mark_for_rerun(run, req.rerun_components)
+
+        background_tasks.add_task(_run_in_background, engine, run_id)
+        return {"run_id": run_id, "status": "pending", "message": "resume scheduled"}
+
     def _serialize_run_brief(run: WorkflowRun) -> dict:
         return {
             "run_id": run.id,
