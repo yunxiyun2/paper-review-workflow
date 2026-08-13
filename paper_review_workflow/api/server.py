@@ -252,6 +252,27 @@ def create_app(
         finally:
             ws_manager.remove_connection(websocket)
 
+    @app.websocket("/ws/runs/{run_id}")
+    async def websocket_run_filtered(websocket: WebSocket, run_id: str):
+        """Run-filtered WebSocket — only events for the specified run_id."""
+        filtered = FilteredWS(websocket, run_id)
+        await ws_manager.add_connection(filtered)
+        try:
+            await ws_manager.send_history(filtered, run_id=run_id)
+            while True:
+                try:
+                    data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                    if data == "ping":
+                        await websocket.send_text('{"event": "pong"}')
+                except asyncio.TimeoutError:
+                    await websocket.send_text('{"event": "heartbeat"}')
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error(f"[WS /ws/runs/{run_id}] error: {e}")
+        finally:
+            ws_manager.remove_connection(filtered)
+
     # Other endpoints added in subsequent tasks
     return app
 

@@ -109,3 +109,83 @@ def mock_llm_ws(monkeypatch):
         mock_client.complete.side_effect = side_effect
         mock_from_env.return_value = mock_client
         yield mock_client
+
+
+def test_websocket_filtered_by_run_id(client, mock_llm_ws):
+    """Connect to /ws/runs/{run_id} — should only receive events for that run."""
+    # First dispatch a run
+    r = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    })
+    run_id = r.json()["run_id"]
+
+    # Connect to filtered WS for that run
+    with client.websocket_connect(f"/ws/runs/{run_id}") as ws:
+        # Collect messages using background reader thread
+        import queue
+        import threading
+        q = queue.Queue()
+        def reader():
+            try:
+                while True:
+                    msg = ws.receive_text()
+                    q.put(msg)
+            except Exception:
+                pass
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+
+        events = []
+        for _ in range(60):
+            try:
+                msg = q.get(timeout=0.5)
+                data = json.loads(msg)
+                events.append(data)
+            except queue.Empty:
+                if events:
+                    break
+        # All events should be for this run_id (or heartbeat/pong)
+        for evt in events:
+            if evt.get("event") in ("heartbeat", "pong"):
+                continue
+            assert evt.get("run_id") == run_id, f"got event for {evt.get('run_id')}, expected {run_id}"
+
+
+def test_websocket_filtered_excludes_other_runs(client, mock_llm_ws):
+    """Dispatch 2 runs, connect to /ws/runs/{r1}, should NOT receive r2 events."""
+    r1 = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    }).json()
+    r2 = client.post("/api/runs", json={
+        "workflow_name": "normal-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+    }).json()
+
+    with client.websocket_connect(f"/ws/runs/{r1['run_id']}") as ws:
+        import queue
+        import threading
+        q = queue.Queue()
+        def reader():
+            try:
+                while True:
+                    msg = ws.receive_text()
+                    q.put(msg)
+            except Exception:
+                pass
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+
+        events = []
+        for _ in range(60):
+            try:
+                msg = q.get(timeout=0.5)
+                data = json.loads(msg)
+                events.append(data)
+            except queue.Empty:
+                if events:
+                    break
+        # No event should mention r2's run_id
+        for evt in events:
+            assert evt.get("run_id") != r2["run_id"], f"got event for r2 on r1 filter"
