@@ -2,6 +2,7 @@
 
 Ported from lwf, removed WAITING/RESUMED/RETRY events (no human approval).
 """
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -49,6 +50,9 @@ class WorkflowEvent:
             "step_id": self.step_id,
             "data": self.data,
         }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False)
 
 
 def make_workflow_started_event(run) -> WorkflowEvent:
