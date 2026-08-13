@@ -1,0 +1,1 @@
+"""FastAPI app factory + endpoints."""
