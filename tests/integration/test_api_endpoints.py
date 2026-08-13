@@ -36,3 +36,48 @@ def test_root_404_or_redirect(client):
 def test_openapi_docs_available(client):
     r = client.get("/docs")
     assert r.status_code == 200
+
+
+def test_list_workflows_includes_normal_review(client):
+    r = client.get("/api/workflows")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total" in data
+    assert "workflows" in data
+    names = [w["name"] for w in data["workflows"]]
+    assert "normal-paper-review" in names
+
+
+def test_get_workflow_summary_has_jobs(client):
+    r = client.get("/api/workflows")
+    workflows = r.json()["workflows"]
+    normal = [w for w in workflows if w["name"] == "normal-paper-review"][0]
+    assert "extract" in normal["jobs"]
+    assert "dimensions" in normal["jobs"]
+    assert "synthesize" in normal["jobs"]
+    assert "decide" in normal["jobs"]
+
+
+def test_register_workflow_via_post(client):
+    yaml_content = """
+name: test-registered
+on: {workflow_dispatch: {}}
+jobs:
+  j:
+    runs-on: local
+    steps:
+      - uses: paper-review/echo@v1
+"""
+    r = client.post("/api/workflows/register", json={"yaml_content": yaml_content})
+    assert r.status_code == 200
+    assert r.json()["name"] == "test-registered"
+
+    # Verify it appears in list
+    r = client.get("/api/workflows")
+    names = [w["name"] for w in r.json()["workflows"]]
+    assert "test-registered" in names
+
+
+def test_register_workflow_invalid_yaml_returns_400(client):
+    r = client.post("/api/workflows/register", json={"yaml_content": "not: valid: yaml: ["})
+    assert r.status_code == 400

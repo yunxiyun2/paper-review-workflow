@@ -80,5 +80,42 @@ def create_app(
         active = sum(1 for r in runs if r.status in (WorkflowStatus.PENDING, WorkflowStatus.RUNNING))
         return HealthResponse(status="ok", version="0.1.0", active_runs=active, total_runs=total)
 
+    @app.get("/api/workflows")
+    async def list_workflows():
+        defs = engine.get_workflow_defs()
+        return {
+            "total": len(defs),
+            "workflows": [
+                {
+                    "name": name,
+                    "file_path": wf_def.file_path,
+                    "jobs": list(wf_def.jobs.keys()),
+                    "dispatch_inputs": _extract_dispatch_inputs(wf_def),
+                }
+                for name, wf_def in defs.items()
+            ],
+        }
+
+    @app.post("/api/workflows/register")
+    async def register_workflow(req: RegisterWorkflowRequest):
+        try:
+            wf_def = engine.register_workflow(req.yaml_content, name=req.name)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"YAML parse failed: {e}")
+        return {
+            "message": "workflow registered",
+            "name": wf_def.name,
+            "jobs": list(wf_def.jobs.keys()),
+        }
+
+    def _extract_dispatch_inputs(wf_def):
+        """Extract on.workflow_dispatch.inputs spec from WorkflowDef."""
+        if not wf_def.on or not wf_def.on.workflow_dispatch:
+            return {}
+        wd = wf_def.on.workflow_dispatch
+        if isinstance(wd, dict):
+            return wd.get("inputs", {})
+        return {}
+
     # Other endpoints added in subsequent tasks
     return app
