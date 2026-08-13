@@ -1,7 +1,10 @@
 import pytest
 from pathlib import Path
+from datetime import datetime
 from paper_review_workflow.engine import ReviewEngine
+from paper_review_workflow.core.models import WorkflowRun, WorkflowStatus
 from paper_review_workflow.storage.memory import MemoryStorage
+from paper_review_workflow.storage.json_file import JsonFileStorage
 
 
 @pytest.fixture
@@ -95,3 +98,50 @@ jobs:
     assert wf.name == "overridden"
     assert engine.get_workflow_def("overridden") is not None
     assert engine.get_workflow_def("original") is None
+
+
+def test_recover_interrupted_runs_marks_running_as_cancelled(tmp_path):
+    storage = JsonFileStorage(data_dir=str(tmp_path))
+    storage.open()
+    # 3 runs: 1 running, 1 pending, 1 success
+    running = WorkflowRun(status=WorkflowStatus.RUNNING, start_time=datetime.now())
+    pending = WorkflowRun(status=WorkflowStatus.PENDING)
+    success = WorkflowRun(status=WorkflowStatus.SUCCESS)
+    storage.save_run(running)
+    storage.save_run(pending)
+    storage.save_run(success)
+    storage.close()
+
+    # Create new engine pointing to same storage
+    engine = ReviewEngine(storage=JsonFileStorage(data_dir=str(tmp_path)))
+    recovered = engine.recover_interrupted_runs()
+    assert recovered == 2  # running + pending
+
+    # Verify states
+    r = engine.storage.get_run(running.id)
+    assert r.status == WorkflowStatus.CANCELLED
+    p = engine.storage.get_run(pending.id)
+    assert p.status == WorkflowStatus.CANCELLED
+    s = engine.storage.get_run(success.id)
+    assert s.status == WorkflowStatus.SUCCESS  # unchanged
+
+
+def test_recover_interrupted_runs_empty_storage(engine):
+    """No runs in empty storage"""
+    recovered = engine.recover_interrupted_runs()
+    assert recovered == 0
+
+
+def test_recover_interrupted_runs_all_terminal(engine, tmp_path):
+    """All runs already terminal — nothing to recover"""
+    storage = JsonFileStorage(data_dir=str(tmp_path))
+    storage.open()
+    success = WorkflowRun(status=WorkflowStatus.SUCCESS)
+    failure = WorkflowRun(status=WorkflowStatus.FAILURE)
+    storage.save_run(success)
+    storage.save_run(failure)
+    storage.close()
+
+    engine = ReviewEngine(storage=JsonFileStorage(data_dir=str(tmp_path)))
+    recovered = engine.recover_interrupted_runs()
+    assert recovered == 0

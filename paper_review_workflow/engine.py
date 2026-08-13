@@ -1,5 +1,6 @@
 """ReviewEngine: facade layer (simplified from lwf WorkflowEngine)."""
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -158,6 +159,23 @@ class ReviewEngine:
     def get_workflow_def(self, name: str) -> Optional[WorkflowDef]:
         """Look up a workflow by name."""
         return self._workflow_defs.get(name)
+
+    def recover_interrupted_runs(self) -> int:
+        """Mark storage's PENDING/RUNNING runs as CANCELLED. Call at API startup."""
+        try:
+            interrupted = self.storage.list_runs(limit=1000)
+        except Exception as e:
+            logger.warning(f"[Engine] recover scan failed: {e}")
+            return 0
+        recovered = 0
+        for run in interrupted:
+            if run.status in (WorkflowStatus.PENDING, WorkflowStatus.RUNNING):
+                run.status = WorkflowStatus.CANCELLED
+                run.end_time = datetime.now()
+                self.storage.save_run(run)
+                recovered += 1
+                logger.info(f"[Engine] recovered run {run.id[:8]} -> cancelled")
+        return recovered
 
     # -- Internal --
 
