@@ -117,5 +117,42 @@ def create_app(
             return wd.get("inputs", {})
         return {}
 
+    @app.post("/api/runs", status_code=202)
+    async def dispatch_run(req: DispatchRequest, background_tasks: BackgroundTasks):
+        # Resolve workflow definition
+        if req.workflow_name:
+            wf_def = engine.get_workflow_def(req.workflow_name)
+            if wf_def is None:
+                raise HTTPException(status_code=404, detail=f"workflow not registered: {req.workflow_name}")
+        elif req.yaml_content:
+            try:
+                wf_def = engine.register_workflow(req.yaml_content)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"YAML parse failed: {e}")
+        else:
+            raise HTTPException(status_code=400, detail="must provide workflow_name or yaml_content")
+
+        # Pre-allocate run (PENDING, saved to storage)
+        try:
+            run = engine.dispatch_workflow(wf_def.name, req.inputs)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+        # Schedule background execution
+        background_tasks.add_task(_run_in_background, engine, run.id)
+
+        return {
+            "run_id": run.id,
+            "workflow_name": wf_def.name,
+            "status": run.status.value,
+            "message": "review dispatched, see GET /api/runs/{run_id} for status",
+        }
+
     # Other endpoints added in subsequent tasks
     return app
+
+
+async def _run_in_background(engine: ReviewEngine, run_id: str) -> None:
+    """Background task: run engine in thread pool to avoid blocking event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: engine.execute_existing_run(run_id))
