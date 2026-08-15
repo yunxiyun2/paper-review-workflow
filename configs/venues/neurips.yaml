@@ -1,0 +1,28 @@
+name: neurips
+display_name: "NeurIPS 2025"
+
+dimensions:
+  - soundness
+  - presentation
+  - contribution
+
+score_min: 1
+score_max: 10
+confidence_min: 0.0
+confidence_max: 1.0
+
+weights:
+  soundness: 1.3
+  presentation: 0.8
+  contribution: 1.4
+
+thresholds:
+  - [9.0, "strong_accept"]
+  - [7.5, "accept"]
+  - [6.0, "weak_accept"]
+  - [4.5, "borderline"]
+  - [3.0, "weak_reject"]
+  - [1.5, "reject"]
+  - [0.0, "strong_reject"]
+
+prompts_dir: "prompts/venues/neurips"
