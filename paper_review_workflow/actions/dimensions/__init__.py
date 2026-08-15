@@ -1,4 +1,4 @@
-"""DimensionAction: scores one paper dimension via LLM, used in matrix strategy."""
+"""DimensionAction: scores one paper dimension via LLM, driven by venue config."""
 import json
 import logging
 from pathlib import Path
@@ -8,40 +8,42 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..base import BaseAction, ActionResult
 from ..registry import ActionRegistry
+from ...core.venue_config import VenueConfig
 from ...llm.client import LLMClient
-from ...llm.schemas import DimensionScore
 
 logger = logging.getLogger(__name__)
 
 
-ALL_DIMENSIONS = [
-    "novelty", "soundness", "significance", "clarity",
-    "reproducibility", "related_work", "positioning", "presentation",
-]
-
-
-_PROMPTS_DIR = Path(__file__).parent / "prompts"
+_PACKAGE_ROOT = Path(__file__).parent.parent.parent  # paper_review_workflow/
 _jinja_env = Environment(
-    loader=FileSystemLoader(str(_PROMPTS_DIR)),
+    loader=FileSystemLoader(str(_PACKAGE_ROOT / "actions" / "dimensions" / "prompts")),
     autoescape=select_autoescape(disabled_extensions=("j2",), default=False),
 )
 
 
 class DimensionAction(BaseAction):
-    """Score one dimension of a paper. Driven by `with.dimension` param."""
+    """Score one dimension of a paper. Driven by `with.dimension` + `env.VENUE` params."""
 
     @property
     def description(self) -> str:
-        return "Score one dimension of a paper (matrix-driven)"
+        return "Score one dimension of a paper (venue-driven)"
 
     def run(self, params, env, context, log_callback=None):
+        venue_name = env.get("VENUE", "neurips")
         dimension = params.get("dimension")
+
         if not dimension:
             return ActionResult(success=False, message="dimension param required")
-        if dimension not in ALL_DIMENSIONS:
+
+        try:
+            venue_config = VenueConfig.load(venue_name)
+        except ValueError as e:
+            return ActionResult(success=False, message=str(e))
+
+        if dimension not in venue_config.dimensions:
             return ActionResult(
                 success=False,
-                message=f"unknown dimension: {dimension}; must be one of {ALL_DIMENSIONS}",
+                message=f"dimension {dimension} not in venue {venue_name}'s dimensions: {venue_config.dimensions}",
             )
 
         session_dir = Path(params["session_dir"])
@@ -60,28 +62,34 @@ class DimensionAction(BaseAction):
             except Exception:
                 pass
 
-        prompt = self._render_prompt(dimension, metadata)
+        # Get venue-specific schema (dynamic score range)
+        schema = venue_config.get_dimension_score_schema()
 
+        # Render venue-specific prompt
+        try:
+            prompt = self._render_prompt(venue_config.prompts_dir, dimension, metadata)
+        except Exception as e:
+            return ActionResult(success=False, message=f"prompt render failed: {e}")
+
+        # Call LLM with venue's schema
         client = LLMClient.from_env()
         response = client.complete(
             system=prompt,
             messages=[{"role": "user", "content": f"Score the {dimension} dimension of this paper."}],
-            response_schema=DimensionScore,
+            response_schema=schema,
             cached_context=paper_text,
         )
         score = response.structured
 
+        # Write score.json (with venue field) + review.md
         out_dir = session_dir / f"10_dim_{dimension}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._write_score_json(
-            out_dir / "score.json", score, dimension, response.model, response.usage
-        )
-        self._write_review_md(out_dir / "review.md", score, dimension)
+        self._write_score_json(out_dir / "score.json", score, dimension, venue_name,
+                                response.model, response.usage)
+        self._write_review_md(out_dir / "review.md", score, dimension, venue_config)
 
         if log_callback:
-            log_callback(
-                f"[{dimension}] score={score.score} conf={score.confidence:.2f}"
-            )
+            log_callback(f"[{venue_name}/{dimension}] score={score.score} conf={score.confidence:.2f}")
 
         return ActionResult(
             success=True,
@@ -91,23 +99,21 @@ class DimensionAction(BaseAction):
                 "score_path": str(out_dir / "score.json"),
                 "review_path": str(out_dir / "review.md"),
             },
-            log_lines=[f"[{dimension}] score={score.score}"],
+            log_lines=[f"[{venue_name}/{dimension}] score={score.score}"],
         )
 
-    def _render_prompt(self, dimension: str, metadata: dict) -> str:
-        template = _jinja_env.get_template(f"{dimension}.j2")
+    def _render_prompt(self, prompts_dir: str, dimension: str, metadata: dict) -> str:
+        """Render venue-specific prompt template."""
+        # prompts_dir is relative to PACKAGE_ROOT/actions/dimensions/prompts/
+        template_path = f"{prompts_dir}/{dimension}.j2"
+        template = _jinja_env.get_template(template_path)
         return template.render(metadata=metadata, dimension=dimension)
 
-    def _write_score_json(
-        self,
-        path: Path,
-        score: DimensionScore,
-        dimension: str,
-        model: str,
-        usage: dict,
-    ) -> None:
+    def _write_score_json(self, path: Path, score, dimension: str, venue: str,
+                          model: str, usage: dict) -> None:
         payload = {
             "schema_version": "1.0",
+            "venue": venue,
             "dimension": dimension,
             "score": score.score,
             "confidence": score.confidence,
@@ -120,10 +126,12 @@ class DimensionAction(BaseAction):
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
-    def _write_review_md(self, path: Path, score: DimensionScore,
-                         dimension: str) -> None:
+    def _write_review_md(self, path: Path, score, dimension: str, venue_config: VenueConfig) -> None:
+        score_range = f"{venue_config.score_min}-{venue_config.score_max}"
         lines = [
-            f"# {dimension.title()} — Score: {score.score}/5 (confidence: {score.confidence:.2f})",
+            f"# {dimension.title()} — Score: {score.score}/{venue_config.score_max} (confidence: {score.confidence:.2f})",
+            "",
+            f"_Venue: {venue_config.display_name} ({venue_config.name})_",
             "",
             "## Strengths",
             *[f"- {s}" for s in score.strengths],
@@ -137,10 +145,7 @@ class DimensionAction(BaseAction):
         if score.evidence:
             lines.extend(["", "## Evidence"])
             for ev in score.evidence:
-                lines.append(
-                    f"- §{ev.get('section', '?')}, p.{ev.get('page', '?')}: "
-                    f"{ev.get('quote', '')[:100]}"
-                )
+                lines.append(f"- §{ev.get('section', '?')}, p.{ev.get('page', '?')}: {ev.get('quote', '')[:100]}")
         path.write_text("\n".join(lines))
 
 

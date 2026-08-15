@@ -1,4 +1,4 @@
-"""SynthesizeAction: combine 8 dimension scores into unified review."""
+"""SynthesizeAction: combine dimension scores into unified review (venue-driven)."""
 import json
 import logging
 from pathlib import Path
@@ -7,7 +7,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .base import BaseAction, ActionResult
 from .registry import ActionRegistry
-from .dimensions import ALL_DIMENSIONS
+from ..core.venue_config import VenueConfig
 from ..llm.client import LLMClient
 from ..llm.schemas import SynthesisResult
 
@@ -22,28 +22,43 @@ _jinja_env = Environment(
 
 
 class SynthesizeAction(BaseAction):
-    """Read 8 dim score.json files, call LLM, write review.md + scores.json."""
+    """Read dim score.json files, call LLM, write review.md + scores.json."""
 
-    MIN_DIMENSIONS = 6  # require at least 6/8 to synthesize
+    MIN_DIMENSIONS = 6  # require at least 6 to synthesize
 
     @property
     def description(self) -> str:
-        return "Synthesize 8 dimension scores into unified review"
+        return "Synthesize dimension scores into unified review"
 
     def run(self, params, env, context, log_callback=None):
         session_dir = Path(params["session_dir"])
 
+        venue_name = env.get("VENUE", "neurips")
+        try:
+            venue_config = VenueConfig.load(venue_name)
+            dimensions = venue_config.dimensions
+        except ValueError:
+            dimensions = []
+
         dim_results = {}
         missing = []
-        for dim in ALL_DIMENSIONS:
-            score_path = session_dir / f"10_dim_{dim}" / "score.json"
-            if score_path.exists():
-                dim_results[dim] = json.loads(score_path.read_text())
-            else:
-                missing.append(dim)
+        # If venue config loaded, use its dimensions; otherwise scan for 10_dim_* dirs
+        if dimensions:
+            for dim in dimensions:
+                score_path = session_dir / f"10_dim_{dim}" / "score.json"
+                if score_path.exists():
+                    dim_results[dim] = json.loads(score_path.read_text())
+                else:
+                    missing.append(dim)
+        else:
+            for d in sorted(session_dir.glob("10_dim_*")):
+                score_path = d / "score.json"
+                if score_path.exists():
+                    dim = d.name.replace("10_dim_", "")
+                    dim_results[dim] = json.loads(score_path.read_text())
 
         if log_callback:
-            log_callback(f"loaded {len(dim_results)}/8 dimensions, missing: {missing}")
+            log_callback(f"loaded {len(dim_results)} dimensions, missing: {missing}")
 
         if len(dim_results) < self.MIN_DIMENSIONS:
             return ActionResult(
@@ -95,7 +110,7 @@ class SynthesizeAction(BaseAction):
         lines.extend(["## Overall Assessment", synthesis.overall_assessment, ""])
         lines.extend(["## Per-Dimension Scores"])
         for dim, result in dim_results.items():
-            lines.append(f"- **{dim}**: {result.get('score', '?')}/5 (conf={result.get('confidence', '?')})")
+            lines.append(f"- **{dim}**: {result.get('score', '?')} (conf={result.get('confidence', '?')})")
         path.write_text("\n".join(lines))
 
 
