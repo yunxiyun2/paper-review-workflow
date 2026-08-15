@@ -115,6 +115,20 @@ python main.py list-runs
 python main.py show-run <run_id>
 ```
 
+## Venue-Specific Mode
+
+The engine supports three venue configurations, selected via the `VENUE` env var (default `neurips`). Each venue defines its own dimensions, score range, weights, and recommendation thresholds; venue configs live in `configs/venues/<name>.yaml`.
+
+| Venue | Dimensions | Score range |
+| --- | --- | --- |
+| **NeurIPS** (default) | Soundness / Presentation / Contribution (3) | 1-10 |
+| **ICML** | Soundness / Significance / Originality / Clarity (4) | 1-4 |
+| **ACL** | Soundness / Excitement / Reproducibility / Overall (4) | 1-4 |
+
+`DimensionAction` builds a dynamic Pydantic schema per venue (e.g. `DimensionScore_neurips` enforces 1-10, `DimensionScore_icml` enforces 1-4). `DecideAction` reads the venue's weights and thresholds to compute the weighted average and map it to an OpenReview-style 7-tier recommendation (`strong_accept` ... `strong_reject`).
+
+To dispatch a review under a specific venue, set `VENUE` in the workflow `env` block (or pass it via the API). The example `configs/neurips_review.yaml` defaults to `neurips`; override with `VENUE: icml` or `VENUE: acl` to switch venues.
+
 ## Configuration
 
 See `configs/neurips_review.yaml` for the default NeurIPS 3-dimension review config. Venue configs (dimensions, score ranges, weights, thresholds) are in `configs/venues/`.
