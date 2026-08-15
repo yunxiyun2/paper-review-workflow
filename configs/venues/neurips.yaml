@@ -25,4 +25,4 @@ thresholds:
   - [1.5, "reject"]
   - [0.0, "strong_reject"]
 
-prompts_dir: "prompts/venues/neurips"
+prompts_dir: "venues/neurips"

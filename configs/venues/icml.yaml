@@ -27,4 +27,4 @@ thresholds:
   - [1.25, "reject"]
   - [0.0, "strong_reject"]
 
-prompts_dir: "prompts/venues/icml"
+prompts_dir: "venues/icml"

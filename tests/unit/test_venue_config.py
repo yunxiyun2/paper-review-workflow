@@ -12,7 +12,7 @@ def test_venue_config_load_neurips():
     assert config.score_min == 1
     assert config.score_max == 10
     assert config.weights["soundness"] == 1.3
-    assert config.prompts_dir == "prompts/venues/neurips"
+    assert config.prompts_dir == "venues/neurips"
 
 
 def test_venue_config_load_icml():

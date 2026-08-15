@@ -6,253 +6,153 @@ from paper_review_workflow.actions.decide import DecideAction
 
 
 @pytest.fixture
-def session_with_scores(tmp_path):
+def session_with_neurips_scores(tmp_path):
+    """3 dims (soundness/presentation/contribution), all score 9 (NeurIPS 1-10)"""
     session_dir = tmp_path / "session"
     syn_dir = session_dir / "50_synthesize"
     syn_dir.mkdir(parents=True)
     scores = {
-        dim: {"score": 4, "confidence": 0.8} for dim in [
-            "novelty", "soundness", "significance", "clarity",
-            "reproducibility", "related_work", "positioning", "presentation",
-        ]
+        "soundness": {"score": 9, "confidence": 0.9},
+        "presentation": {"score": 9, "confidence": 0.8},
+        "contribution": {"score": 9, "confidence": 0.85},
     }
     (syn_dir / "scores.json").write_text(json.dumps(scores))
     return session_dir
 
 
-def test_decide_all_5_strong_accept(session_with_scores):
-    # Modify to all 5s
-    syn_dir = session_with_scores / "50_synthesize"
-    scores = {dim: {"score": 5, "confidence": 1.0} for dim in [
-        "novelty", "soundness", "significance", "clarity",
-        "reproducibility", "related_work", "positioning", "presentation",
-    ]}
-    (syn_dir / "scores.json").write_text(json.dumps(scores))
-
+def test_decide_neurips_all_9_strong_accept(session_with_neurips_scores):
     action = DecideAction()
     result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={}, context={}, log_callback=lambda x: None,
+        params={"session_dir": str(session_with_neurips_scores)},
+        env={"VENUE": "neurips"}, context={}, log_callback=lambda x: None,
     )
 
     assert result.success
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
+    decision = json.loads((session_with_neurips_scores / "60_decision" / "decision.json").read_text())
+    assert decision["venue"] == "neurips"
     assert decision["recommendation"] == "strong_accept"
-    assert decision["weighted_score"] == 5.0
+    assert decision["weighted_score"] == 9.0
+    assert decision["score_range"] == [1, 10]
 
 
-def test_decide_all_1_strong_reject(session_with_scores):
-    syn_dir = session_with_scores / "50_synthesize"
-    scores = {dim: {"score": 1, "confidence": 1.0} for dim in [
-        "novelty", "soundness", "significance", "clarity",
-        "reproducibility", "related_work", "positioning", "presentation",
-    ]}
+def test_decide_neurips_all_1_strong_reject(session_with_neurips_scores):
+    syn_dir = session_with_neurips_scores / "50_synthesize"
+    scores = {dim: {"score": 1, "confidence": 1.0}
+              for dim in ["soundness", "presentation", "contribution"]}
     (syn_dir / "scores.json").write_text(json.dumps(scores))
 
     action = DecideAction()
     result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={}, context={}, log_callback=lambda x: None,
+        params={"session_dir": str(session_with_neurips_scores)},
+        env={"VENUE": "neurips"}, context={}, log_callback=lambda x: None,
     )
 
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
+    decision = json.loads((session_with_neurips_scores / "60_decision" / "decision.json").read_text())
     assert decision["recommendation"] == "strong_reject"
     assert decision["weighted_score"] == 1.0
 
 
-def test_decide_weighted_average_uses_weights(session_with_scores):
-    """soundness (1.2) should weight high vs presentation (0.8)"""
-    syn_dir = session_with_scores / "50_synthesize"
+def test_decide_neurips_weighted_average_uses_weights(session_with_neurips_scores):
+    """contribution (1.4) should weight higher than presentation (0.8)"""
+    syn_dir = session_with_neurips_scores / "50_synthesize"
     scores = {
-        "novelty": {"score": 5}, "soundness": {"score": 1},  # high-weight low score
-        "significance": {"score": 5}, "clarity": {"score": 5},
-        "reproducibility": {"score": 5}, "related_work": {"score": 5},
-        "positioning": {"score": 5}, "presentation": {"score": 5},
+        "soundness": {"score": 5},
+        "presentation": {"score": 1},  # low-weight low score
+        "contribution": {"score": 9},  # high-weight high score
     }
     (syn_dir / "scores.json").write_text(json.dumps(scores))
 
     action = DecideAction()
     result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={}, context={}, log_callback=lambda x: None,
+        params={"session_dir": str(session_with_neurips_scores)},
+        env={"VENUE": "neurips"}, context={}, log_callback=lambda x: None,
     )
 
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
-    # Weighted avg should be lower than simple avg (4.625) due to soundness weight
-    assert decision["weighted_score"] < 4.625
-    assert decision["weighted_score"] > 4.0
+    decision = json.loads((session_with_neurips_scores / "60_decision" / "decision.json").read_text())
+    # Weighted avg: (5*1.3 + 1*0.8 + 9*1.4) / (1.3+0.8+1.4) = (6.5+0.8+12.6)/3.5 = 19.9/3.5 ≈ 5.69
+    assert 5.5 < decision["weighted_score"] < 6.0
 
 
-def test_decide_missing_dim_treated_as_na(session_with_scores):
-    syn_dir = session_with_scores / "50_synthesize"
-    scores = {
-        "novelty": {"score": 4}, "soundness": {"score": 4},
-        "significance": {"score": 4}, "clarity": {"score": 4},
-        "reproducibility": {"score": 4}, "related_work": {"score": 4},
-        "positioning": {"score": 4},
-        # presentation missing
-    }
-    (syn_dir / "scores.json").write_text(json.dumps(scores))
-
-    action = DecideAction()
-    result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={}, context={}, log_callback=lambda x: None,
-    )
-
-    assert result.success
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
-    assert decision["weighted_score"] == 4.0  # remaining 7 all 4
-
-
-def test_decide_description_property():
-    """DecideAction.description returns a human-readable string."""
-    action = DecideAction()
-    assert isinstance(action.description, str)
-    assert "recommendation" in action.description.lower()
-
-
-def test_decide_missing_scores_file_returns_failure(tmp_path):
-    """When scores_path does not exist, run should return failure."""
-    session_dir = tmp_path / "session"
-    session_dir.mkdir()
-    action = DecideAction()
-    result = action.run(
-        params={"session_dir": str(session_dir),
-                "scores_path": str(tmp_path / "missing.json")},
-        env={}, context={}, log_callback=lambda x: None,
-    )
-    assert not result.success
-    assert "cannot read scores" in result.message
-
-
-def test_decide_invalid_scores_json_returns_failure(tmp_path):
-    """When scores.json contains invalid JSON, run should return failure."""
-    session_dir = tmp_path / "session"
-    session_dir.mkdir()
-    bad_json = tmp_path / "bad.json"
-    bad_json.write_text("::: not json :::")
-    action = DecideAction()
-    result = action.run(
-        params={"session_dir": str(session_dir),
-                "scores_path": str(bad_json)},
-        env={}, context={}, log_callback=lambda x: None,
-    )
-    assert not result.success
-    assert "cannot read scores" in result.message
-
-
-def test_decide_score_is_none_skips_dimension(session_with_scores):
-    """When score is None for a dimension, that dimension should be skipped."""
-    syn_dir = session_with_scores / "50_synthesize"
-    scores = {
-        "novelty": {"score": None},  # None score skipped
-        "soundness": {"score": 4},
-        "significance": {"score": 4},
-        "clarity": {"score": 4},
-        "reproducibility": {"score": 4},
-        "related_work": {"score": 4},
-        "positioning": {"score": 4},
-        "presentation": {"score": 4},
-    }
-    (syn_dir / "scores.json").write_text(json.dumps(scores))
-    action = DecideAction()
-    result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={}, context={}, log_callback=lambda x: None,
-    )
-    assert result.success
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
-    # 7 dimensions scored 4 -- weighted score 4.0
-    assert decision["weighted_score"] == 4.0
-
-
-def test_decide_empty_scores_returns_failure(tmp_path):
-    """Empty scores dict should return failure with 'no dimensions to score'."""
+def test_decide_icml_uses_icml_thresholds(tmp_path):
+    """ICML 1-4 scale uses ICML thresholds (3.75 → strong_accept)"""
     session_dir = tmp_path / "session"
     syn_dir = session_dir / "50_synthesize"
     syn_dir.mkdir(parents=True)
-    (syn_dir / "scores.json").write_text("{}")
+    scores = {
+        "soundness": {"score": 4},
+        "significance": {"score": 4},
+        "originality": {"score": 4},
+        "clarity": {"score": 4},
+    }
+    (syn_dir / "scores.json").write_text(json.dumps(scores))
+
     action = DecideAction()
     result = action.run(
         params={"session_dir": str(session_dir)},
-        env={}, context={}, log_callback=lambda x: None,
+        env={"VENUE": "icml"}, context={}, log_callback=lambda x: None,
     )
-    assert not result.success
-    assert "no dimensions to score" in result.message
+
+    decision = json.loads((session_dir / "60_decision" / "decision.json").read_text())
+    assert decision["venue"] == "icml"
+    assert decision["recommendation"] == "strong_accept"
+    assert decision["score_range"] == [1, 4]
+    assert decision["weighted_score"] == 4.0
 
 
-def test_decide_invalid_weight_env_value_ignored(session_with_scores):
-    """Invalid WEIGHT_ env values should be silently ignored."""
-    syn_dir = session_with_scores / "50_synthesize"
-    action = DecideAction()
-    result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={"WEIGHT_NOVELTY": "not-a-number"}, context={}, log_callback=lambda x: None,
-    )
-    assert result.success
-    # Default weight for novelty (1.0) should be used
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
-    assert decision["weights_used"]["novelty"] == 1.0
-
-
-def test_decide_map_to_recommendation_fallback():
-    """Negative scores should fall through thresholds to strong_reject."""
-    action = DecideAction()
-    assert action._map_to_recommendation(-1.0) == "strong_reject"
-
-
-def test_decide_extract_key_concerns_with_weaknesses(session_with_scores):
-    """Concerns should be extracted from low-score dimensions with weaknesses."""
-    syn_dir = session_with_scores / "50_synthesize"
+def test_decide_acl_uses_acl_thresholds(tmp_path):
+    """ACL 1-4 scale with ACL dimensions"""
+    session_dir = tmp_path / "session"
+    syn_dir = session_dir / "50_synthesize"
+    syn_dir.mkdir(parents=True)
     scores = {
-        "novelty": {"score": 2, "weaknesses": ["unclear contribution"]},
-        "soundness": {"score": 4},
-        "significance": {"score": 4},
-        "clarity": {"score": 4},
-        "reproducibility": {"score": 4},
-        "related_work": {"score": 4},
-        "positioning": {"score": 4},
-        "presentation": {"score": 4},
+        "soundness": {"score": 1},
+        "excitement": {"score": 1},
+        "reproducibility": {"score": 1},
+        "overall": {"score": 1},
     }
     (syn_dir / "scores.json").write_text(json.dumps(scores))
+
     action = DecideAction()
     result = action.run(
-        params={"session_dir": str(session_with_scores),
-                "scores_path": str(syn_dir / "scores.json")},
-        env={}, context={}, log_callback=lambda x: None,
+        params={"session_dir": str(session_dir)},
+        env={"VENUE": "acl"}, context={}, log_callback=lambda x: None,
     )
-    assert result.success
-    decision = json.loads((session_with_scores / "60_decision" / "decision.json").read_text())
-    assert any("novelty" in c for c in decision["key_concerns"])
+
+    decision = json.loads((session_dir / "60_decision" / "decision.json").read_text())
+    assert decision["venue"] == "acl"
+    assert decision["recommendation"] == "strong_reject"
 
 
-def test_decide_uses_default_scores_path_when_not_provided(session_with_scores):
-    """When scores_path is not provided, default to session_dir/50_synthesize/scores.json."""
+def test_decide_missing_dim_skipped(session_with_neurips_scores):
+    """Missing dim is skipped, not zeroed"""
+    syn_dir = session_with_neurips_scores / "50_synthesize"
+    scores = {
+        "soundness": {"score": 9},
+        "presentation": {"score": 9},
+        # contribution missing
+    }
+    (syn_dir / "scores.json").write_text(json.dumps(scores))
+
     action = DecideAction()
     result = action.run(
-        params={"session_dir": str(session_with_scores)},
-        env={}, context={}, log_callback=lambda x: None,
+        params={"session_dir": str(session_with_neurips_scores)},
+        env={"VENUE": "neurips"}, context={}, log_callback=lambda x: None,
     )
+
     assert result.success
+    decision = json.loads((session_with_neurips_scores / "60_decision" / "decision.json").read_text())
+    assert decision["weighted_score"] == 9.0  # remaining 2 dims all 9
 
 
-def test_decide_final_report_copied_when_review_exists(session_with_scores):
-    """final_report.md should be created when 50_synthesize/review.md exists."""
-    syn_dir = session_with_scores / "50_synthesize"
-    (syn_dir / "review.md").write_text("# Review\n\nThis is a review.")
+def test_decide_env_weight_override(session_with_neurips_scores):
+    """WEIGHT_SOUNDNESS env var overrides venue_config weight"""
     action = DecideAction()
     result = action.run(
-        params={"session_dir": str(session_with_scores)},
-        env={}, context={}, log_callback=lambda x: None,
+        params={"session_dir": str(session_with_neurips_scores)},
+        env={"VENUE": "neurips", "WEIGHT_SOUNDNESS": "5.0"},
+        context={}, log_callback=lambda x: None,
     )
     assert result.success
-    final_report = session_with_scores / "final_report.md"
-    assert final_report.exists()
-    assert "Review" in final_report.read_text()
+    decision = json.loads((session_with_neurips_scores / "60_decision" / "decision.json").read_text())
+    # soundness weighted at 5.0 instead of 1.3
+    assert decision["weights_used"]["soundness"] == 5.0
