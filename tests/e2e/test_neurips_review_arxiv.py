@@ -18,8 +18,8 @@ def test_review_real_arxiv_paper(tmp_path):
     # Use a small, well-known arXiv paper (AgentReview, ~10 pages)
     # https://arxiv.org/abs/2402.12098
     run = engine.run_from_file(
-        "configs/normal_review.yaml",
-        payload={"paper_source": "2402.12098"},
+        "configs/neurips_review.yaml",
+        payload={"paper_source": "2402.12098", "mode": "neurips"},
     )
 
     assert run.status.value == "success"
@@ -46,10 +46,9 @@ def test_review_real_arxiv_paper(tmp_path):
                 if sessions_path.exists():
                     session_dirs = [d for d in sessions_path.rglob("00_extract") if d.is_dir()]
 
-    # Verify all 8 dimensions scored
+    # Verify all 3 NeurIPS dimensions scored
     dim_count = 0
-    for dim in ["novelty", "soundness", "significance", "clarity",
-                "reproducibility", "related_work", "positioning", "presentation"]:
+    for dim in ["soundness", "presentation", "contribution"]:
         # Search across all session dirs
         for sd in session_dirs:
             score_file = sd.parent / f"10_dim_{dim}" / "score.json"
@@ -58,13 +57,13 @@ def test_review_real_arxiv_paper(tmp_path):
                 break
 
     # If we found no session dirs, the test still verifies the run succeeded
-    # (which means all 8 dims did run via the matrix). The detailed artifact
+    # (which means all 3 dims did run via the matrix). The detailed artifact
     # checks would be done manually if running locally.
     assert run.status.value == "success", f"run should succeed, got {run.status.value}"
 
-    # Verify all 8 dim jobs are in the run
+    # Verify all 3 dim jobs are in the run
     dim_jobs = [k for k in run.jobs.keys() if k.startswith("dimensions_")]
-    assert len(dim_jobs) == 8, f"expected 8 dim jobs, got {len(dim_jobs)}: {dim_jobs}"
+    assert len(dim_jobs) == 3, f"expected 3 dim jobs, got {len(dim_jobs)}: {dim_jobs}"
 
     # Verify each dim job succeeded
     for dim_job in dim_jobs:

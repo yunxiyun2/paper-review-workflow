@@ -1,6 +1,6 @@
 # Paper Review Workflow
 
-AI-powered academic paper review workflow engine. Runs an 8-dimension LLM-based peer review on a PDF or arXiv paper, producing structured scores and a final recommendation.
+AI-powered academic paper review workflow engine. Runs a venue-specific LLM-based peer review (NeurIPS 3-dimension, ICML/ACL 4-dimension) on a PDF or arXiv paper, producing structured scores and a final recommendation.
 
 ## Installation
 
@@ -21,14 +21,14 @@ export ANTHROPIC_API_KEY=sk-ant-...
 Review an arXiv paper:
 
 ```bash
-python main.py run configs/normal_review.yaml \
+python main.py run configs/neurips_review.yaml \
     --payload '{"paper_source": "2402.12098"}'
 ```
 
 Review a local PDF:
 
 ```bash
-python main.py run configs/normal_review.yaml \
+python main.py run configs/neurips_review.yaml \
     --payload '{"paper_source": "/path/to/paper.pdf"}'
 ```
 
@@ -66,7 +66,7 @@ Example: dispatch a review via curl:
 ```bash
 curl -X POST http://localhost:8000/api/runs \
   -H "Content-Type: application/json" \
-  -d '{"workflow_name": "normal-paper-review", "inputs": {"paper_source": "2402.12098"}}'
+  -d '{"workflow_name": "neurips-paper-review", "inputs": {"paper_source": "2402.12098"}}'
 ```
 
 ## Output Structure
@@ -82,7 +82,7 @@ sessions/<paper_id>/<run_id>/
     sections.json
     full_text.md
     references.json
-  10_dim_novelty/             # 8 dimension scores (parallel)
+  10_dim_soundness/            # 3 dimension scores (parallel)
     score.json
     review.md
   ...
@@ -105,7 +105,7 @@ python main.py resume <run_id>
 Force rerun a specific component (cascades to downstream):
 
 ```bash
-python main.py resume <run_id> --rerun dim_novelty
+python main.py resume <run_id> --rerun dimensions_soundness
 ```
 
 ## List Past Runs
@@ -117,7 +117,7 @@ python main.py show-run <run_id>
 
 ## Configuration
 
-See `configs/normal_review.yaml` for the default 8-dimension review config. Customize weights via `WEIGHT_*` env vars.
+See `configs/neurips_review.yaml` for the default NeurIPS 3-dimension review config. Venue configs (dimensions, score ranges, weights, thresholds) are in `configs/venues/`.
 
 ## Testing
 
@@ -134,7 +134,7 @@ pytest --run-e2e -m e2e
 This project reuses the lwf workflow engine skeleton (GitHub Actions-style YAML, three-layer state machine, matrix parallelism) and adds paper-review-specific actions:
 
 - `extract`: PDF / arXiv parsing
-- `dim_score` (matrix × 8): LLM scoring per dimension
+- `dim_score` (matrix × 3 NeurIPS / × 4 ICML/ACL): LLM scoring per dimension
 - `synthesize`: LLM meta-review
 - `decide`: pure-rule weighted scoring
 

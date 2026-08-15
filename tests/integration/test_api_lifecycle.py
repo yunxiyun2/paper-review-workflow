@@ -92,21 +92,26 @@ def test_shutdown_cancels_active_runs(tmp_path, monkeypatch):
     import time
     from unittest.mock import patch, MagicMock
     from paper_review_workflow.llm.client import LLMClient
-    from paper_review_workflow.llm.schemas import DimensionScore, SynthesisResult
+    from paper_review_workflow.llm.schemas import SynthesisResult
     from paper_review_workflow.llm.base import LLMResponse
+    from paper_review_workflow.actions.synthesize import SynthesizeAction
 
     LLMClient.reset()
 
-    fake_dim = DimensionScore(
-        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
-        justification="x" * 200, evidence=[],
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a"]
+    fake_score_obj.weaknesses = ["b"]
+    fake_score_obj.justification = "x" * 200
+    fake_score_obj.evidence = []
+
     fake_synth = SynthesisResult(
         summary="x" * 250, key_strengths=["s"], key_weaknesses=["w"],
         questions_for_authors=["q"], overall_assessment="ok",
     )
     fake_dim_resp = MagicMock(spec=LLMResponse)
-    fake_dim_resp.structured = fake_dim
+    fake_dim_resp.structured = fake_score_obj
     fake_dim_resp.usage = {"input_tokens": 100, "output_tokens": 50,
                            "cache_creation_input_tokens": 0,
                            "cache_read_input_tokens": 30000}
@@ -123,7 +128,8 @@ def test_shutdown_cancels_active_runs(tmp_path, monkeypatch):
     app = create_app(storage=storage, configs_dir="configs")
 
     run_id_holder = {}
-    with patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
+    with patch.object(SynthesizeAction, "MIN_DIMENSIONS", 2), \
+         patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
         mock_client = MagicMock()
         mock_client.model = "test-model"
         started = []
@@ -144,8 +150,8 @@ def test_shutdown_cancels_active_runs(tmp_path, monkeypatch):
         with TestClient(app) as client:
             # Dispatch a run (will be slow)
             r = client.post("/api/runs", json={
-                "workflow_name": "normal-paper-review",
-                "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+                "workflow_name": "neurips-paper-review",
+                "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
             })
             run_id_holder["run_id"] = r.json()["run_id"]
             # Wait for the background task to reach the LLM call, proving

@@ -23,7 +23,6 @@ import pytest
 
 from paper_review_workflow.engine import ReviewEngine
 from paper_review_workflow.storage.json_file import JsonFileStorage
-from paper_review_workflow.llm.schemas import DimensionScore
 from paper_review_workflow.llm.base import LLMResponse
 from paper_review_workflow.llm.client import LLMClient
 from paper_review_workflow.actions.registry import ActionRegistry
@@ -53,6 +52,7 @@ env:
   LLM_PROVIDER: anthropic
   LLM_MODEL: test-model
   SESSIONS_ROOT: __SESSIONS_ROOT__
+  VENUE: neurips
 jobs:
   extract:
     runs-on: local
@@ -70,8 +70,8 @@ jobs:
     needs: extract
     strategy:
       matrix:
-        dimension: [novelty, soundness, significance, clarity]
-      max-parallel: 4
+        dimension: [soundness, presentation, contribution]
+      max-parallel: 3
     runs-on: local
     steps:
       - uses: paper-review/dim_score@v1
@@ -91,13 +91,16 @@ jobs:
 
     storage = JsonFileStorage(data_dir=str(tmp_path / "storage"))
 
-    fake_dim = DimensionScore(
-        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
-        justification="x" * 200, evidence=[],
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a"]
+    fake_score_obj.weaknesses = ["b"]
+    fake_score_obj.justification = "x" * 200
+    fake_score_obj.evidence = []
 
     fake_response = MagicMock(spec=LLMResponse)
-    fake_response.structured = fake_dim
+    fake_response.structured = fake_score_obj
     fake_response.usage = {"input_tokens": 100, "output_tokens": 50,
                            "cache_creation_input_tokens": 0,
                            "cache_read_input_tokens": 30000}

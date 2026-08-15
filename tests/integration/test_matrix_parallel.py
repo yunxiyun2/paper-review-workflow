@@ -1,10 +1,10 @@
-"""M4.3: integration test verifying the 8 dimension calls happen in parallel.
+"""M4.3: integration test verifying the 3 dimension calls happen in parallel.
 
 The matrix strategy in ``job_executor._execute_matrix`` submits all matrix
 combinations to a ``ThreadPoolExecutor(max_workers=max-parallel)``. This test
-asserts that behaviour end-to-end: a workflow with an 8-way ``matrix`` job must
-issue all 8 LLM calls within a single 0.5 s latency window. If the calls were
-serial we would observe ~4 s of wall time instead.
+asserts that behaviour end-to-end: a workflow with a 3-way ``matrix`` job must
+issue all 3 LLM calls within a single 0.5 s latency window. If the calls were
+serial we would observe ~1.5 s of wall time instead.
 
 The matrix executor injects ``MATRIX_<KEY>`` env vars into each sub-job (see
 ``JobExecutor._execute_matrix_job``); the test action reads the dimension from
@@ -51,11 +51,11 @@ class TimingDimensionAction(BaseAction):
         return ActionResult(
             success=True,
             outputs={
-                "score": 4,
+                "score": 7,
                 "confidence": 0.8,
                 "dimension": dimension,
             },
-            log_lines=[f"[{dimension}] score=4"],
+            log_lines=[f"[{dimension}] score=7"],
         )
 
 
@@ -70,12 +70,12 @@ def fake_paper_session(tmp_path):
     return session_dir
 
 
-def test_8_dimensions_run_in_parallel(fake_paper_session, tmp_path):
-    """Verify 8 LLM calls happen in parallel, not serially.
+def test_3_dimensions_run_in_parallel(fake_paper_session, tmp_path):
+    """Verify 3 LLM calls happen in parallel, not serially.
 
-    With max-parallel=8 and a 0.5s simulated LLM latency per call:
-    - Parallel: all 8 calls start within ~0.5s (one sleep cycle)
-    - Serial: would take ~4s (8 * 0.5s)
+    With max-parallel=3 and a 0.5s simulated LLM latency per call:
+    - Parallel: all 3 calls start within ~0.5s (one sleep cycle)
+    - Serial: would take ~1.5s (3 * 0.5s)
     """
     call_times: list = []
 
@@ -98,14 +98,14 @@ env:
   LLM_PROVIDER: anthropic
   LLM_MODEL: test-model
   SESSION_DIR: "{fake_paper_session}"
+  VENUE: neurips
 jobs:
   dimensions:
     runs-on: local
     strategy:
       matrix:
-        dimension: [novelty, soundness, significance, clarity,
-                    reproducibility, related_work, positioning, presentation]
-      max-parallel: 8
+        dimension: [soundness, presentation, contribution]
+      max-parallel: 3
     steps:
       - uses: paper-review/dim_score@v1
         with:
@@ -117,20 +117,20 @@ jobs:
     assert run.status.value == "success", (
         f"workflow should succeed; got {run.status.value}"
     )
-    assert len(call_times) == 8, (
-        f"expected 8 LLM calls, got {len(call_times)}"
+    assert len(call_times) == 3, (
+        f"expected 3 LLM calls, got {len(call_times)}"
     )
-    # If parallel, all 8 calls start within ~0.5s (one sleep cycle).
-    # If serial, the spread would be ~4s.
+    # If parallel, all 3 calls start within ~0.5s (one sleep cycle).
+    # If serial, the spread would be ~1.5s.
     elapsed = max(call_times) - min(call_times)
     assert elapsed < 1.0, (
         f"calls not parallel: elapsed={elapsed:.2f}s "
-        f"(parallel would be <0.5s, serial would be ~4s)"
+        f"(parallel would be <0.5s, serial would be ~1.5s)"
     )
 
 
 def test_dimensions_run_serially_when_max_parallel_is_1(fake_paper_session, tmp_path):
-    """Sanity check: with max-parallel=1, the same 8 calls are serial.
+    """Sanity check: with max-parallel=1, the same 3 calls are serial.
 
     This validates that the parallel assertion in the test above is actually
     detecting parallelism (not just fast execution).
@@ -154,13 +154,13 @@ env:
   LLM_PROVIDER: anthropic
   LLM_MODEL: test-model
   SESSION_DIR: "{fake_paper_session}"
+  VENUE: neurips
 jobs:
   dimensions:
     runs-on: local
     strategy:
       matrix:
-        dimension: [novelty, soundness, significance, clarity,
-                    reproducibility, related_work, positioning, presentation]
+        dimension: [soundness, presentation, contribution]
       max-parallel: 1
     steps:
       - uses: paper-review/dim_score@v1
@@ -171,11 +171,11 @@ jobs:
     run = engine.run_from_file(str(yaml), payload={})
 
     assert run.status.value == "success"
-    assert len(call_times) == 8
-    # With max-parallel=1, calls are serial: spread should be >= 7 * 0.3s
+    assert len(call_times) == 3
+    # With max-parallel=1, calls are serial: spread should be >= 2 * 0.3s
     elapsed = max(call_times) - min(call_times)
-    assert elapsed >= 2.0, (
-        f"calls should be serial (>=2.0s spread), got {elapsed:.2f}s"
+    assert elapsed >= 0.5, (
+        f"calls should be serial (>=0.5s spread), got {elapsed:.2f}s"
     )
 
 
@@ -184,7 +184,6 @@ def test_matrix_with_param_resolution(fake_paper_session, tmp_path):
     from paper_review_workflow.actions.registry import ActionRegistry
     from paper_review_workflow.engine import ReviewEngine
     from paper_review_workflow.storage.memory import MemoryStorage
-    from paper_review_workflow.llm.schemas import DimensionScore
     from paper_review_workflow.llm.base import LLMResponse
     from unittest.mock import MagicMock, patch
 
@@ -195,12 +194,15 @@ def test_matrix_with_param_resolution(fake_paper_session, tmp_path):
     from paper_review_workflow.actions.builtin import register_builtin_actions
     register_builtin_actions(engine.registry)
 
-    fake_score = DimensionScore(
-        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
-        justification="x" * 200,
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a"]
+    fake_score_obj.weaknesses = ["b"]
+    fake_score_obj.justification = "x" * 200
+    fake_score_obj.evidence = []
     fake_response = MagicMock(spec=LLMResponse)
-    fake_response.structured = fake_score
+    fake_response.structured = fake_score_obj
     fake_response.usage = {"input_tokens": 100, "output_tokens": 50,
                            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 30000}
     fake_response.model = "test-model"
@@ -219,12 +221,13 @@ env:
   LLM_PROVIDER: anthropic
   LLM_MODEL: test-model
   SESSION_DIR: "{fake_paper_session}"
+  VENUE: neurips
 jobs:
   dimensions:
     runs-on: local
     strategy:
       matrix:
-        dimension: [novelty, soundness]
+        dimension: [soundness, presentation]
       max-parallel: 2
     steps:
       - uses: paper-review/dim_score@v1
@@ -239,7 +242,7 @@ jobs:
 
     assert run.status.value == "success", f"run failed: {run.status.value}"
     # Verify both dimensions completed
-    assert "dimensions_novelty" in run.jobs
     assert "dimensions_soundness" in run.jobs
-    assert run.jobs["dimensions_novelty"].status.value == "success"
+    assert "dimensions_presentation" in run.jobs
     assert run.jobs["dimensions_soundness"].status.value == "success"
+    assert run.jobs["dimensions_presentation"].status.value == "success"

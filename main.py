@@ -1,4 +1,4 @@
-"""Entry point: `python main.py run configs/normal_review.yaml --payload '...'`"""
+"""Entry point: `python main.py run configs/neurips_review.yaml --payload '...'`"""
 import sys
 from paper_review_workflow.cli import main
 

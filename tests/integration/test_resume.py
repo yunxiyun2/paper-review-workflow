@@ -5,10 +5,11 @@ from unittest.mock import MagicMock, patch
 
 from paper_review_workflow.engine import ReviewEngine
 from paper_review_workflow.storage.json_file import JsonFileStorage
-from paper_review_workflow.llm.schemas import DimensionScore, SynthesisResult
+from paper_review_workflow.llm.schemas import SynthesisResult
 from paper_review_workflow.llm.base import LLMResponse
 from paper_review_workflow.llm.client import LLMClient
 from paper_review_workflow.actions.registry import ActionRegistry
+from paper_review_workflow.actions.synthesize import SynthesizeAction
 
 
 @pytest.fixture
@@ -22,17 +23,21 @@ def test_resume_skips_completed_and_reruns_failed(fake_paper, tmp_path, monkeypa
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     LLMClient.reset()
 
-    fake_dim = DimensionScore(
-        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
-        justification="x" * 200, evidence=[],
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a"]
+    fake_score_obj.weaknesses = ["b"]
+    fake_score_obj.justification = "x" * 200
+    fake_score_obj.evidence = []
+
     fake_synth = SynthesisResult(
         summary="x" * 250, key_strengths=["s"], key_weaknesses=["w"],
         questions_for_authors=["q"], overall_assessment="ok",
     )
 
     fake_dim_response = MagicMock(spec=LLMResponse)
-    fake_dim_response.structured = fake_dim
+    fake_dim_response.structured = fake_score_obj
     fake_dim_response.usage = {"input_tokens": 100, "output_tokens": 50,
                                 "cache_creation_input_tokens": 0,
                                 "cache_read_input_tokens": 30000}
@@ -58,6 +63,7 @@ env:
   LLM_PROVIDER: anthropic
   LLM_MODEL: test-model
   SESSIONS_ROOT: __SESSIONS_ROOT__
+  VENUE: neurips
 jobs:
   extract:
     runs-on: local
@@ -75,7 +81,7 @@ jobs:
     needs: extract
     strategy:
       matrix:
-        dimension: [novelty, soundness]
+        dimension: [soundness, presentation]
       max-parallel: 2
     runs-on: local
     steps:
@@ -114,11 +120,11 @@ jobs:
     # Reset singleton so builtin actions are re-registered cleanly.
     ActionRegistry._instance = None
 
-    # The test workflow only has 2 dimensions (novelty, soundness) instead of
-    # the full 8.  SynthesizeAction.MIN_DIMENSIONS defaults to 6, which would
+    # The test workflow only has 2 dimensions (soundness, presentation) instead
+    # of the full 3.  SynthesizeAction.MIN_DIMENSIONS defaults to 6, which would
     # reject a 2-dimension run.  Patch it down to 2 so synthesis can proceed
     # with the reduced test fixture.
-    with patch("paper_review_workflow.actions.synthesize.SynthesizeAction.MIN_DIMENSIONS", 2):
+    with patch.object(SynthesizeAction, "MIN_DIMENSIONS", 2):
         # First run: let one dimension fail
         call_count = {"dim": 0}
 
@@ -127,7 +133,7 @@ jobs:
             if schema is SynthesisResult:
                 raise RuntimeError("should not reach synthesize on failed run")
             call_count["dim"] += 1
-            # Fail the second dim call (soundness in matrix expansion order)
+            # Fail the second dim call (presentation in matrix expansion order)
             if call_count["dim"] == 2:
                 raise RuntimeError("simulated API timeout")
             return fake_dim_response

@@ -38,24 +38,24 @@ def test_openapi_docs_available(client):
     assert r.status_code == 200
 
 
-def test_list_workflows_includes_normal_review(client):
+def test_list_workflows_includes_neurips_review(client):
     r = client.get("/api/workflows")
     assert r.status_code == 200
     data = r.json()
     assert "total" in data
     assert "workflows" in data
     names = [w["name"] for w in data["workflows"]]
-    assert "normal-paper-review" in names
+    assert "neurips-paper-review" in names
 
 
 def test_get_workflow_summary_has_jobs(client):
     r = client.get("/api/workflows")
     workflows = r.json()["workflows"]
-    normal = [w for w in workflows if w["name"] == "normal-paper-review"][0]
-    assert "extract" in normal["jobs"]
-    assert "dimensions" in normal["jobs"]
-    assert "synthesize" in normal["jobs"]
-    assert "decide" in normal["jobs"]
+    neurips = [w for w in workflows if w["name"] == "neurips-paper-review"][0]
+    assert "extract" in neurips["jobs"]
+    assert "dimensions" in neurips["jobs"]
+    assert "synthesize" in neurips["jobs"]
+    assert "decide" in neurips["jobs"]
 
 
 def test_register_workflow_via_post(client):
@@ -84,20 +84,19 @@ def test_register_workflow_invalid_yaml_returns_400(client):
 
 
 # ── POST /api/runs (dispatch) tests (M4.5) ───────────────────────────
-
 from unittest.mock import patch, MagicMock
 
 
 def test_dispatch_returns_202_with_run_id(client, mock_llm):
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     assert r.status_code == 202
     data = r.json()
     assert "run_id" in data
     assert data["status"] == "pending"
-    assert data["workflow_name"] == "normal-paper-review"
+    assert data["workflow_name"] == "neurips-paper-review"
 
 
 def test_dispatch_unknown_workflow_returns_404(client):
@@ -137,21 +136,26 @@ def mock_llm(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    from paper_review_workflow.llm.schemas import DimensionScore, SynthesisResult
+    from paper_review_workflow.llm.schemas import SynthesisResult
     from paper_review_workflow.llm.base import LLMResponse
     from paper_review_workflow.llm.client import LLMClient
+    from paper_review_workflow.actions.synthesize import SynthesizeAction
     LLMClient.reset()
 
-    fake_dim = DimensionScore(
-        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
-        justification="x" * 200, evidence=[],
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a"]
+    fake_score_obj.weaknesses = ["b"]
+    fake_score_obj.justification = "x" * 200
+    fake_score_obj.evidence = []
+
     fake_synth = SynthesisResult(
         summary="x" * 250, key_strengths=["s"], key_weaknesses=["w"],
         questions_for_authors=["q"], overall_assessment="ok",
     )
     fake_dim_resp = MagicMock(spec=LLMResponse)
-    fake_dim_resp.structured = fake_dim
+    fake_dim_resp.structured = fake_score_obj
     fake_dim_resp.usage = {"input_tokens": 100, "output_tokens": 50,
                            "cache_creation_input_tokens": 0,
                            "cache_read_input_tokens": 30000}
@@ -163,7 +167,9 @@ def mock_llm(monkeypatch):
                              "cache_read_input_tokens": 0}
     fake_synth_resp.model = "test-model"
 
-    with patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
+    # NeurIPS has only 3 dims; MIN_DIMENSIONS defaults to 6.
+    with patch.object(SynthesizeAction, "MIN_DIMENSIONS", 2), \
+         patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
         mock_client = MagicMock()
         mock_client.model = "test-model"
         def side_effect(**kw):
@@ -192,8 +198,8 @@ def test_list_runs_empty(client):
 def test_list_runs_after_dispatch(client, mock_llm):
     # Dispatch a run
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     # Wait for it to complete (or fail)
@@ -211,8 +217,8 @@ def test_list_runs_after_dispatch(client, mock_llm):
 
 def test_get_run_returns_jobs_status(client, mock_llm):
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     # Wait for completion
@@ -238,8 +244,8 @@ def test_get_run_nonexistent_returns_404(client):
 def test_list_runs_filter_by_status(client, mock_llm):
     # Dispatch a run that will succeed
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     for _ in range(60):
@@ -258,8 +264,8 @@ def test_list_runs_pagination(client, mock_llm):
     run_ids = []
     for _ in range(3):
         r = client.post("/api/runs", json={
-            "workflow_name": "normal-paper-review",
-            "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+            "workflow_name": "neurips-paper-review",
+            "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
         })
         run_ids.append(r.json()["run_id"])
     # Wait for all to complete
@@ -280,8 +286,8 @@ def test_list_runs_pagination(client, mock_llm):
 
 def test_cancel_run_returns_200(client, mock_llm):
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     # Wait briefly to ensure it's running or queued
@@ -299,8 +305,8 @@ def test_cancel_nonexistent_returns_404(client):
 def test_resume_run_after_completion(client, mock_llm):
     # First dispatch
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     # Wait for it to finish
@@ -317,8 +323,8 @@ def test_resume_run_after_completion(client, mock_llm):
 
 def test_resume_with_rerun_components(client, mock_llm):
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     for _ in range(60):
@@ -327,7 +333,7 @@ def test_resume_with_rerun_components(client, mock_llm):
             break
         time.sleep(0.5)
     r = client.post(f"/api/runs/{run_id}/resume", json={
-        "rerun_components": ["dimensions_novelty"]
+        "rerun_components": ["dimensions_soundness"]
     })
     assert r.status_code == 200
 
@@ -339,8 +345,8 @@ def test_resume_nonexistent_returns_404(client):
 
 def test_resume_rerun_all(client, mock_llm):
     r = client.post("/api/runs", json={
-        "workflow_name": "normal-paper-review",
-        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf"},
+        "workflow_name": "neurips-paper-review",
+        "inputs": {"paper_source": "tests/fixtures/sample_paper.pdf", "mode": "neurips"},
     })
     run_id = r.json()["run_id"]
     for _ in range(60):

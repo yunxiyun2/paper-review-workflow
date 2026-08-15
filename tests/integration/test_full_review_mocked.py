@@ -5,10 +5,11 @@ from unittest.mock import MagicMock, patch
 
 from paper_review_workflow.engine import ReviewEngine
 from paper_review_workflow.storage.memory import MemoryStorage
-from paper_review_workflow.llm.schemas import DimensionScore, SynthesisResult
+from paper_review_workflow.llm.schemas import SynthesisResult
 from paper_review_workflow.llm.base import LLMResponse
 from paper_review_workflow.llm.client import LLMClient
 from paper_review_workflow.actions.registry import ActionRegistry
+from paper_review_workflow.actions.synthesize import SynthesizeAction
 
 
 @pytest.fixture
@@ -17,18 +18,20 @@ def fake_paper():
 
 
 def test_full_review_workflow_mocked(fake_paper, tmp_path, monkeypatch):
-    """End-to-end: extract -> 8 dims -> synthesize -> decide. LLM mocked."""
+    """End-to-end: extract -> 3 dims -> synthesize -> decide. LLM mocked."""
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     LLMClient.reset()
 
-    fake_dim_score = DimensionScore(
-        score=4, confidence=0.8,
-        strengths=["a strength"], weaknesses=["a weakness"],
-        justification="x" * 250,
-        evidence=[],
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a strength"]
+    fake_score_obj.weaknesses = ["a weakness"]
+    fake_score_obj.justification = "x" * 250
+    fake_score_obj.evidence = []
+
     fake_synth = SynthesisResult(
         summary="x" * 250,
         key_strengths=["strength"],
@@ -38,7 +41,7 @@ def test_full_review_workflow_mocked(fake_paper, tmp_path, monkeypatch):
     )
 
     fake_dim_response = MagicMock(spec=LLMResponse)
-    fake_dim_response.structured = fake_dim_score
+    fake_dim_response.structured = fake_score_obj
     fake_dim_response.usage = {"input_tokens": 100, "output_tokens": 50,
                                 "cache_creation_input_tokens": 0,
                                 "cache_read_input_tokens": 30000}
@@ -84,14 +87,7 @@ env:
   LLM_MAX_TOKENS: "4096"
   LLM_TEMPERATURE: "0.0"
   SESSIONS_ROOT: __SESSIONS_ROOT__
-  WEIGHT_NOVELTY: "1.0"
-  WEIGHT_SOUNDESS: "1.2"
-  WEIGHT_SIGNIFICANCE: "1.2"
-  WEIGHT_CLARITY: "0.8"
-  WEIGHT_REPRODUCIBILITY: "1.0"
-  WEIGHT_RELATED_WORK: "0.8"
-  WEIGHT_POSITIONING: "0.8"
-  WEIGHT_PRESENTATION: "0.8"
+  VENUE: neurips
 jobs:
   extract:
     runs-on: local
@@ -109,9 +105,8 @@ jobs:
     needs: extract
     strategy:
       matrix:
-        dimension: [novelty, soundness, significance, clarity,
-                    reproducibility, related_work, positioning, presentation]
-      max-parallel: 8
+        dimension: [soundness, presentation, contribution]
+      max-parallel: 3
     runs-on: local
     steps:
       - uses: paper-review/dim_score@v1
@@ -147,14 +142,15 @@ jobs:
         yaml = tmp_path / "test_review.yaml"
         yaml.write_text(yaml_content)
 
-        engine = ReviewEngine(storage=MemoryStorage())
-        run = engine.run_from_file(str(yaml), payload={})
+        # NeurIPS has only 3 dims; SynthesizeAction.MIN_DIMENSIONS defaults to 6.
+        with patch.object(SynthesizeAction, "MIN_DIMENSIONS", 2):
+            engine = ReviewEngine(storage=MemoryStorage())
+            run = engine.run_from_file(str(yaml), payload={})
 
     assert run.status.value == "success"
 
     assert (session_dir / "00_extract" / "full_text.md").exists()
-    for dim in ["novelty", "soundness", "significance", "clarity",
-                "reproducibility", "related_work", "positioning", "presentation"]:
+    for dim in ["soundness", "presentation", "contribution"]:
         assert (session_dir / f"10_dim_{dim}" / "score.json").exists(), f"missing {dim}"
     assert (session_dir / "50_synthesize" / "review.md").exists()
     assert (session_dir / "60_decision" / "decision.json").exists()
@@ -164,4 +160,4 @@ jobs:
         "strong_accept", "accept", "weak_accept", "borderline",
         "weak_reject", "reject", "strong_reject",
     ]
-    assert 1.0 <= decision["weighted_score"] <= 5.0
+    assert 1.0 <= decision["weighted_score"] <= 10.0

@@ -20,8 +20,8 @@ def test_e2e_real_arxiv_review_via_api():
     with TestClient(app) as client:
         # Dispatch
         r = client.post("/api/runs", json={
-            "workflow_name": "normal-paper-review",
-            "inputs": {"paper_source": "2402.12098"},
+            "workflow_name": "neurips-paper-review",
+            "inputs": {"paper_source": "2402.12098", "mode": "neurips"},
         })
         assert r.status_code == 202
         run_id = r.json()["run_id"]
@@ -39,9 +39,9 @@ def test_e2e_real_arxiv_review_via_api():
 
         assert data["status"] == "success", f"expected success, got {data['status']}"
 
-        # Verify all 8 dim jobs present
+        # Verify all 3 dim jobs present
         dim_jobs = [k for k in data["jobs"] if k.startswith("dimensions_")]
-        assert len(dim_jobs) == 8
+        assert len(dim_jobs) == 3
 
         # Verify decide job succeeded
         assert data["jobs"]["decide"]["status"] == "success"
@@ -57,8 +57,8 @@ def test_e2e_websocket_receives_real_events():
         with client.websocket_connect("/ws") as ws:
             # Dispatch
             client.post("/api/runs", json={
-                "workflow_name": "normal-paper-review",
-                "inputs": {"paper_source": "2402.12098"},
+                "workflow_name": "neurips-paper-review",
+                "inputs": {"paper_source": "2402.12098", "mode": "neurips"},
             })
             # Should receive workflow.started within 60s
             q = queue.Queue()

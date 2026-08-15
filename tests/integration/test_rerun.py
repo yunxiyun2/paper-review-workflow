@@ -4,10 +4,11 @@ from unittest.mock import MagicMock, patch
 
 from paper_review_workflow.engine import ReviewEngine
 from paper_review_workflow.storage.json_file import JsonFileStorage
-from paper_review_workflow.llm.schemas import DimensionScore, SynthesisResult
+from paper_review_workflow.llm.schemas import SynthesisResult
 from paper_review_workflow.llm.base import LLMResponse
 from paper_review_workflow.llm.client import LLMClient
 from paper_review_workflow.actions.registry import ActionRegistry
+from paper_review_workflow.actions.synthesize import SynthesizeAction
 
 
 @pytest.fixture
@@ -16,23 +17,27 @@ def fake_paper():
 
 
 def test_rerun_dim_cascades_to_downstream(fake_paper, tmp_path, monkeypatch):
-    """--rerun dimensions_novelty should cascade to synthesize + decide"""
+    """--rerun dimensions_soundness should cascade to synthesize + decide"""
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     LLMClient.reset()
 
-    fake_dim = DimensionScore(
-        score=4, confidence=0.8, strengths=["a"], weaknesses=["b"],
-        justification="x" * 200, evidence=[],
-    )
+    fake_score_obj = MagicMock()
+    fake_score_obj.score = 7
+    fake_score_obj.confidence = 0.8
+    fake_score_obj.strengths = ["a"]
+    fake_score_obj.weaknesses = ["b"]
+    fake_score_obj.justification = "x" * 200
+    fake_score_obj.evidence = []
+
     fake_synth = SynthesisResult(
         summary="x" * 250, key_strengths=["s"], key_weaknesses=["w"],
         questions_for_authors=["q"], overall_assessment="ok",
     )
 
     fake_dim_response = MagicMock(spec=LLMResponse)
-    fake_dim_response.structured = fake_dim
+    fake_dim_response.structured = fake_score_obj
     fake_dim_response.usage = {"input_tokens": 100, "output_tokens": 50,
                                 "cache_creation_input_tokens": 0,
                                 "cache_read_input_tokens": 30000}
@@ -58,6 +63,7 @@ env:
   LLM_PROVIDER: anthropic
   LLM_MODEL: test-model
   SESSIONS_ROOT: __SESSIONS_ROOT__
+  VENUE: neurips
 jobs:
   extract:
     runs-on: local
@@ -75,7 +81,7 @@ jobs:
     needs: extract
     strategy:
       matrix:
-        dimension: [novelty, soundness]
+        dimension: [soundness, presentation]
       max-parallel: 2
     runs-on: local
     steps:
@@ -117,8 +123,8 @@ jobs:
     ActionRegistry._instance = None
 
     # First run succeeds.  Patch MIN_DIMENSIONS down to 2 since the test
-    # workflow only has 2 dimensions (novelty, soundness) instead of 8.
-    with patch("paper_review_workflow.actions.synthesize.SynthesizeAction.MIN_DIMENSIONS", 2):
+    # workflow only has 2 dimensions (soundness, presentation) instead of 3.
+    with patch.object(SynthesizeAction, "MIN_DIMENSIONS", 2):
         with patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
             mock_client = MagicMock()
             mock_client.model = "test-model"
@@ -138,9 +144,9 @@ jobs:
                 f"first run should succeed, got {run1.status.value}"
             )
 
-        # Now rerun dimensions_novelty -- should cascade to synthesize + decide.
+        # Now rerun dimensions_soundness -- should cascade to synthesize + decide.
         # Note: because the matrix is re-expanded as a unit when the parent
-        # "dimensions" job is reset, sibling dimensions_soundness is also
+        # "dimensions" job is reset, sibling dimensions_presentation is also
         # re-run -- a known limitation of matrix rerun.  The test asserts
         # the cascade reaches synthesize + decide, not that siblings are
         # preserved.
@@ -164,7 +170,7 @@ jobs:
 
             engine2 = ReviewEngine(storage=storage)
             run2 = engine2.resume_run(
-                run1.id, rerun_components=["dimensions_novelty"]
+                run1.id, rerun_components=["dimensions_soundness"]
             )
 
     assert run2.status.value == "success", (
@@ -190,21 +196,21 @@ jobs:
         f"{run2.jobs['extract'].status.value}"
     )
 
-    # dimensions_soundness: the matrix re-expands as a unit when the parent
+    # dimensions_presentation: the matrix re-expands as a unit when the parent
     # "dimensions" job is reset, so this sibling is also re-run.  With the
-    # mock returning a valid DimensionScore, it ends up SUCCESS again.
+    # mock returning a valid score, it ends up SUCCESS again.
     # We assert it is SUCCESS (not that it was preserved).
+    assert "dimensions_presentation" in run2.jobs, "dimensions_presentation job should exist"
+    assert run2.jobs["dimensions_presentation"].status.value == "success", (
+        f"dimensions_presentation should be SUCCESS after rerun, got "
+        f"{run2.jobs['dimensions_presentation'].status.value}"
+    )
+
+    # dimensions_soundness was reset and re-run; it must be SUCCESS now.
     assert "dimensions_soundness" in run2.jobs, "dimensions_soundness job should exist"
     assert run2.jobs["dimensions_soundness"].status.value == "success", (
         f"dimensions_soundness should be SUCCESS after rerun, got "
         f"{run2.jobs['dimensions_soundness'].status.value}"
-    )
-
-    # dimensions_novelty was reset and re-run; it must be SUCCESS now.
-    assert "dimensions_novelty" in run2.jobs, "dimensions_novelty job should exist"
-    assert run2.jobs["dimensions_novelty"].status.value == "success", (
-        f"dimensions_novelty should be SUCCESS after rerun, got "
-        f"{run2.jobs['dimensions_novelty'].status.value}"
     )
 
     # synthesize and decide were reset + re-run; they must be SUCCESS.
