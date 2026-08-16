@@ -91,3 +91,55 @@ def test_from_env_anthropic_keeps_default_model(monkeypatch):
     client = LLMClient.from_env()
     assert client.model == "claude-sonnet-4-6"
     assert client._provider.provider_name == "anthropic"
+
+
+def test_from_env_openai_provider(monkeypatch):
+    """LLMClient.from_env() should use OpenAIProvider.from_env()"""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+    LLMClient.reset()
+    client = LLMClient.from_env()
+    assert client.model == "gpt-4o"
+    assert client._provider.provider_name == "openai"
+
+
+def test_from_env_deepseek_provider(monkeypatch):
+    """LLMClient.from_env() should use DeepSeekProvider.from_env()"""
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+    LLMClient.reset()
+    client = LLMClient.from_env()
+    assert client.model == "deepseek-chat"
+    assert client._provider.provider_name == "deepseek"
+
+
+def test_from_env_openai_missing_api_key_raises(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+    LLMClient.reset()
+    from paper_review_workflow.llm.base import LLMError
+    with pytest.raises(LLMError, match="OPENAI_API_KEY not set"):
+        LLMClient.from_env()
+
+
+def test_from_env_deepseek_missing_api_key_raises(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+    LLMClient.reset()
+    from paper_review_workflow.llm.base import LLMError
+    with pytest.raises(LLMError, match="DEEPSEEK_API_KEY not set"):
+        LLMClient.from_env()
+
+
+def test_from_env_openai_missing_llm_model_raises(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    LLMClient.reset()
+    from paper_review_workflow.llm.base import LLMError
+    with pytest.raises(LLMError, match="LLM_MODEL not set"):
+        LLMClient.from_env()
