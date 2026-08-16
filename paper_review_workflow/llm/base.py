@@ -33,6 +33,13 @@ class SchemaValidationError(LLMError):
 class LLMProvider(ABC):
     provider_name: str = ""
 
+    @classmethod
+    @abstractmethod
+    def from_env(cls) -> "LLMProvider":
+        """Read provider-specific env vars and construct the provider.
+        Each subclass implements this to read its own API key + config."""
+        ...
+
     @abstractmethod
     def complete(
         self,

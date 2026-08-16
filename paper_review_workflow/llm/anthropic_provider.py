@@ -8,7 +8,7 @@ import anthropic
 from pydantic import ValidationError
 
 from .base import (
-    LLMProvider, LLMResponse,
+    LLMProvider, LLMResponse, LLMError,
     RateLimitError, ContextLengthError, SchemaValidationError,
 )
 
@@ -24,6 +24,15 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, api_key: Optional[str] = None):
         self._client = anthropic.Anthropic(api_key=api_key)
+
+    @classmethod
+    def from_env(cls) -> "AnthropicProvider":
+        """Read ANTHROPIC_API_KEY from environment and construct provider."""
+        import os
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise LLMError("ANTHROPIC_API_KEY not set")
+        return cls(api_key=api_key)
 
     def complete(self, system, messages, model, max_tokens,
                  temperature=0.0, response_schema=None, cached_context=None):

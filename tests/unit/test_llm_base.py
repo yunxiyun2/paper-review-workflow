@@ -7,6 +7,10 @@ from paper_review_workflow.llm.registry import ProviderRegistry
 class FakeProvider(LLMProvider):
     provider_name = "fake"
 
+    @classmethod
+    def from_env(cls) -> "FakeProvider":
+        return cls()
+
     def complete(self, **kwargs):
         class FakeSchema(BaseModel):
             x: int

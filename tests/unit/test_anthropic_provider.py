@@ -350,3 +350,19 @@ def test_parse_response_empty_text_returns_none(mock_cls):
         response_schema=None,
     )
     assert result.text is None
+
+
+def test_anthropic_from_env_reads_api_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    from paper_review_workflow.llm.anthropic_provider import AnthropicProvider
+    provider = AnthropicProvider.from_env()
+    assert provider is not None
+    assert provider.provider_name == "anthropic"
+
+
+def test_anthropic_from_env_missing_key_raises(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from paper_review_workflow.llm.base import LLMError
+    from paper_review_workflow.llm.anthropic_provider import AnthropicProvider
+    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY not set"):
+        AnthropicProvider.from_env()

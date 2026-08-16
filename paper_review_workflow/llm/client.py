@@ -23,11 +23,20 @@ class LLMClient:
             provider_name = os.environ.get("LLM_PROVIDER", "anthropic")
             registry = ProviderRegistry()
             provider_cls = registry.get(provider_name)
-            api_key = os.environ.get("ANTHROPIC_API_KEY") if provider_name == "anthropic" else None
-            provider = provider_cls(api_key=api_key) if provider_name == "anthropic" else provider_cls()
+            provider = provider_cls.from_env()
+
+            # Anthropic has default model; others require LLM_MODEL
+            model = os.environ.get("LLM_MODEL")
+            if not model:
+                if provider_name == "anthropic":
+                    model = "claude-sonnet-4-6"
+                else:
+                    from .base import LLMError
+                    raise LLMError(f"LLM_MODEL not set (required for provider '{provider_name}')")
+
             cls._instance = cls(
                 provider=provider,
-                model=os.environ.get("LLM_MODEL", "claude-sonnet-4-6"),
+                model=model,
                 max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "4096")),
                 temperature=float(os.environ.get("LLM_TEMPERATURE", "0.0")),
             )
