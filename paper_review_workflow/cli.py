@@ -68,6 +68,23 @@ def _cmd_show_run(engine: ReviewEngine, args) -> int:
     return 0
 
 
+def _cmd_export(engine: ReviewEngine, args) -> int:
+    from pathlib import Path
+    from .exporters.openreview import OpenReviewExporter
+    exporter = OpenReviewExporter()
+    try:
+        xml = exporter.export(args.run_id, engine.storage)
+    except ValueError as e:
+        print(f"[Error] {e}", file=sys.stderr)
+        return 1
+    if args.output:
+        Path(args.output).write_text(xml, encoding="utf-8")
+        print(f"Exported to {args.output}")
+    else:
+        print(xml)
+    return 0
+
+
 def _cmd_server(args) -> int:
     """启动 FastAPI 服务器"""
     import os
@@ -151,6 +168,12 @@ def main(argv: Optional[list] = None) -> int:
     show_p = sub.add_parser("show-run", help="show run details", parents=[common_sub])
     show_p.add_argument("run_id")
 
+    # export subcommand (Phase 2 #4)
+    export_p = sub.add_parser("export", help="导出评审结果为 XML")
+    export_p.add_argument("run_id", help="要导出的 run ID")
+    export_p.add_argument("--format", default="xml", choices=["xml"], help="导出格式")
+    export_p.add_argument("--output", default=None, help="输出文件路径(不指定则 stdout)")
+
     # ── server 子命令 (Phase 2 #5) ──
     server_p = sub.add_parser("server", help="启动 FastAPI 服务器",
                                parents=[common_sub])
@@ -209,6 +232,8 @@ def main(argv: Optional[list] = None) -> int:
         return _cmd_list_runs(engine, args)
     elif args.command == "show-run":
         return _cmd_show_run(engine, args)
+    elif args.command == "export":
+        return _cmd_export(engine, args)
     return 0
 
 

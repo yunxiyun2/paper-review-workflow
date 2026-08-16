@@ -224,6 +224,20 @@ def create_app(
         background_tasks.add_task(_run_in_background, engine, run_id)
         return {"run_id": run_id, "status": "pending", "message": "resume scheduled"}
 
+    @app.get("/api/runs/{run_id}/export")
+    async def export_run(run_id: str, format: str = "xml"):
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        from ..exporters.openreview import OpenReviewExporter
+        exporter = OpenReviewExporter()
+        try:
+            xml = exporter.export(run_id, engine.storage)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        from fastapi.responses import Response
+        return Response(content=xml, media_type="application/xml")
+
     def _serialize_run_brief(run: WorkflowRun) -> dict:
         return {
             "run_id": run.id,
