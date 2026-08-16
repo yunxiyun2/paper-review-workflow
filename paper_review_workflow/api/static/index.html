@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Paper Review Workflow</title>
+  <style>
+    :root {
+      --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --surface3: #30363d;
+      --border: #30363d; --text: #e6edf3; --text2: #8b949e; --text3: #6e7681;
+      --accent: #58a6ff; --success: #3fb950; --failure: #f85149; --warning: #d29922;
+      --pending: #8b949e; --running: #58a6ff; --cancelled: #d29922;
+      --radius: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      font-size: 14px; line-height: 1.5;
+    }
+    .topbar {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 16px;
+      padding: 0 20px; height: 52px; position: sticky; top: 0; z-index: 100;
+    }
+    .logo { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+    .tabs { display: flex; gap: 4px; }
+    .tab-btn {
+      background: none; border: none; color: var(--text2); cursor: pointer;
+      padding: 7px 14px; border-radius: var(--radius); font-size: 13px;
+      transition: all .15s;
+    }
+    .tab-btn:hover { background: var(--surface2); color: var(--text); }
+    .tab-btn.active { background: var(--surface3); color: var(--text); font-weight: 600; }
+    .ws-status { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+    .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); transition: background .3s; }
+    .ws-dot.connected { background: var(--success); }
+    .ws-dot.disconnected { background: var(--failure); }
+    .main-panel { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
+    .card-header { padding: 11px 15px; border-bottom: 1px solid var(--border); background: var(--surface2); font-weight: 600; }
+    .card-body { padding: 15px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 5px; padding: 6px 13px;
+      border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2);
+      color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: all .15s; white-space: nowrap;
+    }
+    .btn:hover { background: var(--surface3); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover { background: #1f6feb; }
+    .btn-danger { background: #da3633; border-color: #da3633; color: #fff; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+      border-radius: 20px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge.pending { background: rgba(139,148,158,.15); color: var(--pending); }
+    .badge.running { background: rgba(88,166,255,.15); color: var(--running); }
+    .badge.success { background: rgba(63,185,80,.15); color: var(--success); }
+    .badge.failure { background: rgba(248,81,73,.15); color: var(--failure); }
+    .badge.cancelled { background: rgba(210,153,34,.15); color: var(--cancelled); }
+    input, select, textarea {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      border-radius: var(--radius); padding: 6px 10px; font-size: 13px; width: 100%;
+    }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 4px; margin-top: 10px; }
+    .form-row { margin-bottom: 10px; }
+    .log-box {
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 10px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6;
+    }
+    .log-line { color: var(--text2); }
+    .log-line .ts { color: var(--text3); }
+    .log-line .ev { color: var(--accent); }
+    .run-list { display: flex; flex-direction: column; gap: 4px; }
+    .run-item {
+      padding: 8px 12px; border-radius: var(--radius); cursor: pointer;
+      border: 1px solid transparent; transition: all .15s;
+    }
+    .run-item:hover { background: var(--surface2); }
+    .run-item.active { background: var(--surface3); border-color: var(--accent); }
+    .run-item .run-id { font-size: 12px; color: var(--text2); }
+    .score-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .score-bar .label { width: 120px; font-size: 12px; color: var(--text2); }
+    .score-bar .bar { flex: 1; height: 8px; background: var(--surface3); border-radius: 4px; overflow: hidden; }
+    .score-bar .fill { height: 100%; background: var(--accent); border-radius: 4px; }
+    .score-bar .val { width: 100px; font-size: 12px; text-align: right; }
+    .yaml-output {
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 12px; font-family: monospace; font-size: 12px; white-space: pre-wrap;
+      max-height: 300px; overflow-y: auto;
+    }
+    .empty-state { text-align: center; padding: 40px; color: var(--text3); }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="logo">📄 Paper Review</span>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="assemble" onclick="switchTab('assemble')">装配</button>
+      <button class="tab-btn" data-tab="dispatch" onclick="switchTab('dispatch')">触发</button>
+      <button class="tab-btn" data-tab="monitor" onclick="switchTab('monitor')">监控</button>
+      <button class="tab-btn" data-tab="decision" onclick="switchTab('decision')">决策</button>
+    </nav>
+    <span class="ws-status">
+      <span class="ws-dot" id="ws-dot"></span>
+      <span id="ws-label">未连接</span>
+    </span>
+  </div>
+
+  <div class="main-panel">
+    <!-- M3: Assembly Tab -->
+    <div id="tab-assemble" class="tab-content active">
+      <div class="card">
+        <div class="card-header">YAML 配置装配器</div>
+        <div class="card-body">
+          <div class="form-row">
+            <label>Workflow Name</label>
+            <input type="text" id="asm-wf-name" value="my-neurips-review" />
+          </div>
+          <div class="form-row">
+            <label>Venue</label>
+            <select id="asm-venue" onchange="renderWeightSliders()"></select>
+          </div>
+          <div class="form-row">
+            <label>Dimensions &amp; Weights</label>
+            <div id="asm-weights"></div>
+          </div>
+          <div class="form-row">
+            <label>paper_source 默认值 (可选)</label>
+            <input type="text" id="asm-paper-source" value="" placeholder="arXiv ID 或 PDF 路径" />
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <button class="btn btn-primary" onclick="generateYAML()">Generate YAML</button>
+            <button class="btn" onclick="downloadYAML()">Download</button>
+            <button class="btn btn-primary" onclick="registerAndDispatch()">Register &amp; Dispatch</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">生成的 YAML</div>
+        <div class="card-body">
+          <div class="yaml-output" id="asm-yaml-output"># 点击 "Generate YAML" 生成配置</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- M4: Dispatch Tab -->
+    <div id="tab-dispatch" class="tab-content">
+      <div class="card">
+        <div class="card-header">触发评审</div>
+        <div class="card-body">
+          <div class="form-row">
+            <label>Workflow</label>
+            <select id="dis-wf"></select>
+          </div>
+          <div class="form-row">
+            <label>paper_source (必填: arXiv ID 或 PDF 路径)</label>
+            <input type="text" id="dis-paper-source" placeholder="2402.12098 或 /path/to/paper.pdf" />
+          </div>
+          <div class="form-row">
+            <label>Venue (mode)</label>
+            <select id="dis-venue"></select>
+          </div>
+          <div style="margin-top:14px;">
+            <button class="btn btn-primary" onclick="dispatchRun()">🚀 Dispatch</button>
+          </div>
+          <div id="dis-result" style="margin-top:14px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- M5: Monitor Tab -->
+    <div id="tab-monitor" class="tab-content">
+      <div style="display:flex;gap:14px;">
+        <div class="card" style="flex:0 0 300px;">
+          <div class="card-header">
+            Run 列表
+            <button class="btn btn-sm" style="float:right;" onclick="loadRuns()">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="run-list" id="mon-run-list"></div>
+          </div>
+        </div>
+        <div style="flex:1;">
+          <div class="card">
+            <div class="card-header">Run 详情</div>
+            <div class="card-body" id="mon-detail">
+              <p class="empty-state">选择左侧 run 查看详情</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">实时日志</div>
+            <div class="card-body">
+              <div class="log-box" id="mon-log"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- M6: Decision Tab -->
+    <div id="tab-decision" class="tab-content">
+      <div class="card">
+        <div class="card-header">查看决策</div>
+        <div class="card-body">
+          <div class="form-row">
+            <label>Select Run (仅显示成功的 run)</label>
+            <select id="dec-run" onchange="loadDecision(this.value)"></select>
+          </div>
+        </div>
+      </div>
+      <div id="dec-content"></div>
+    </div>
+  </div>
+
+  <script>
+    // ── Global state ──
+    const state = { venues: [], workflows: [], runs: [], activeRunId: null, ws: null };
+
+    // ── Tab switching ──
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + tabName).classList.add('active');
+      document.querySelector('[data-tab="' + tabName + '"]').classList.add('active');
+      if (tabName === 'monitor') loadRuns();
+      if (tabName === 'decision') loadCompletedRuns();
+    }
+
+    // ── API utilities ──
+    async function apiGet(path) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error('GET ' + path + ' failed: ' + r.status);
+      return r.json();
+    }
+    async function apiPost(path, body) {
+      const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) throw new Error('POST ' + path + ' failed: ' + r.status);
+      return r.json();
+    }
+
+    // ── WebSocket status ──
+    function updateWsStatus(status) {
+      const dot = document.getElementById('ws-dot');
+      const label = document.getElementById('ws-label');
+      dot.className = 'ws-dot ' + status;
+      label.textContent = status === 'connected' ? '已连接' : status === 'disconnected' ? '已断开' : '未连接';
+    }
+
+    // ── Assembly tab (M3) ──
+    async function loadVenues() {
+      state.venues = await apiGet('/api/venues');
+      const sel = document.getElementById('asm-venue');
+      sel.innerHTML = state.venues.map(v => '<option value="' + v.name + '">' + v.display_name + '</option>').join('');
+      renderWeightSliders();
+    }
+
+    function renderWeightSliders() {
+      const venueName = document.getElementById('asm-venue').value;
+      const venue = state.venues.find(v => v.name === venueName);
+      if (!venue) return;
+      const container = document.getElementById('asm-weights');
+      container.innerHTML = venue.dimensions.map(dim => {
+        const w = venue.weights[dim];
+        return '<div class="form-row" style="display:flex;align-items:center;gap:10px;">' +
+          '<label style="width:120px;margin:0;">' + dim + '</label>' +
+          '<input type="range" min="0.5" max="2.0" step="0.1" value="' + w + '" ' +
+          'oninput="this.nextElementSibling.textContent=this.value" ' +
+          'data-dim="' + dim + '" class="weight-slider" />' +
+          '<span style="width:30px;text-align:center;">' + w + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    function collectWeightValues() {
+      const weights = {};
+      document.querySelectorAll('.weight-slider').forEach(s => {
+        weights[s.dataset.dim] = parseFloat(s.value);
+      });
+      return weights;
+    }
+
+    function generateYAML() {
+      const wfName = document.getElementById('asm-wf-name').value || 'my-review';
+      const venueName = document.getElementById('asm-venue').value;
+      const venue = state.venues.find(v => v.name === venueName);
+      if (!venue) return '';
+      const weights = collectWeightValues();
+      const paperSource = document.getElementById('asm-paper-source').value;
+      const weightLines = venue.dimensions.map(d => '  WEIGHT_' + d.toUpperCase() + ': "' + weights[d] + '"').join('\n');
+      const yaml = 'name: ' + wfName + '\n\non:\n  workflow_dispatch:\n    inputs:\n      paper_source:\n        description: "论文来源"\n        required: true\n        type: string\n' +
+        (paperSource ? '        default: "' + paperSource + '"\n' : '') +
+        '      mode:\n        type: choice\n        default: ' + venueName + '\n        options: [' + state.venues.map(v => v.name).join(', ') + ']\n\n' +
+        'env:\n  VENUE: ${{ inputs.mode }}\n' + weightLines + '\n\n' +
+        'jobs:\n  extract:\n    runs-on: local\n    steps:\n      - uses: paper-review/extract@v1\n        with:\n          source: ${{ inputs.paper_source }}\n          session_dir: ./sessions/${{ env.PAPER_ID }}/${{ env.RUN_ID }}\n' +
+        '  dimensions:\n    needs: extract\n    strategy:\n      matrix:\n        dimension: [' + venue.dimensions.join(', ') + ']\n      max-parallel: ' + venue.dimensions.length + '\n    runs-on: local\n    steps:\n      - uses: paper-review/dim_score@v1\n        with:\n          dimension: ${{ matrix.dimension }}\n          session_dir: ./sessions/${{ env.PAPER_ID }}/${{ env.RUN_ID }}\n          full_text_path: ${{ needs.extract.outputs.full_text_path }}\n          metadata_path: ${{ needs.extract.outputs.metadata_path }}\n' +
+        '  synthesize:\n    needs: dimensions\n    runs-on: local\n    steps:\n      - uses: paper-review/synthesize@v1\n        with:\n          session_dir: ./sessions/${{ env.PAPER_ID }}/${{ env.RUN_ID }}\n' +
+        '  decide:\n    needs: synthesize\n    runs-on: local\n    steps:\n      - uses: paper-review/decide@v1\n        with:\n          session_dir: ./sessions/${{ env.PAPER_ID }}/${{ env.RUN_ID }}\n          scores_path: ${{ needs.synthesize.outputs.scores_path }}';
+      document.getElementById('asm-yaml-output').textContent = yaml;
+      return yaml;
+    }
+
+    function downloadYAML() {
+      const yaml = document.getElementById('asm-yaml-output').textContent;
+      if (yaml.startsWith('# 点击')) { alert('请先生成 YAML'); return; }
+      const blob = new Blob([yaml], { type: 'text/yaml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (document.getElementById('asm-wf-name').value || 'review') + '.yaml';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function registerAndDispatch() {
+      const yaml = generateYAML();
+      const paperSource = document.getElementById('asm-paper-source').value;
+      try {
+        const reg = await apiPost('/api/workflows/register', { yaml_content: yaml });
+        const inputs = paperSource ? { paper_source: paperSource } : {};
+        const run = await apiPost('/api/runs', { workflow_name: reg.name, inputs: inputs });
+        alert('已触发! run_id: ' + run.run_id);
+        switchTab('monitor');
+        selectRun(run.run_id);
+      } catch(e) {
+        alert('Dispatch 失败: ' + e.message);
+      }
+    }
+
+    // ── Dispatch tab (M4) ──
+    function populateDispatchDropdowns() {
+      const wfSel = document.getElementById('dis-wf');
+      wfSel.innerHTML = state.workflows.map(w => '<option value="' + w.name + '">' + w.name + '</option>').join('');
+      const venueSel = document.getElementById('dis-venue');
+      venueSel.innerHTML = state.venues.map(v => '<option value="' + v.name + '">' + v.display_name + '</option>').join('');
+    }
+
+    async function loadWorkflows() {
+      state.workflows = await apiGet('/api/workflows');
+      populateDispatchDropdowns();
+    }
+
+    async function dispatchRun() {
+      const wfName = document.getElementById('dis-wf').value;
+      const paperSource = document.getElementById('dis-paper-source').value;
+      const venue = document.getElementById('dis-venue').value;
+      if (!paperSource) { alert('请输入 paper_source'); return; }
+      try {
+        const run = await apiPost('/api/runs', {
+          workflow_name: wfName,
+          inputs: { paper_source: paperSource, mode: venue }
+        });
+        document.getElementById('dis-result').innerHTML =
+          '<div class="card" style="border-color:var(--success);"><div class="card-body">' +
+          '<p><strong>run_id:</strong> ' + run.run_id + '</p>' +
+          '<p><strong>status:</strong> ' + run.status + '</p>' +
+          '<button class="btn btn-primary" onclick="switchTab(\'monitor\'); selectRun(\'' + run.run_id + '\');">→ 前往监控</button>' +
+          '</div></div>';
+      } catch(e) {
+        alert('Dispatch 失败: ' + e.message);
+      }
+    }
+
+    // ── Monitor tab (M5) ──
+    async function loadRuns() {
+      try {
+        const data = await apiGet('/api/runs');
+        state.runs = data.runs;
+        renderRunList();
+      } catch(e) { console.error('loadRuns failed:', e); }
+    }
+
+    function renderRunList() {
+      const list = document.getElementById('mon-run-list');
+      if (state.runs.length === 0) {
+        list.innerHTML = '<p class="empty-state">暂无 run</p>';
+        return;
+      }
+      list.innerHTML = state.runs.map(r => {
+        const active = r.run_id === state.activeRunId ? 'active' : '';
+        return '<div class="run-item ' + active + '" onclick="selectRun(\'' + r.run_id + '\')">' +
+          '<div class="run-id">' + r.run_id.substring(0, 20) + '...</div>' +
+          '<span class="badge ' + r.status + '"><span class="dot"></span>' + r.status + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    function selectRun(runId) {
+      state.activeRunId = runId;
+      renderRunList();
+      document.getElementById('mon-log').innerHTML = '';
+      connectWebSocket(runId);
+      loadRunDetail(runId);
+    }
+
+    async function loadRunDetail(runId) {
+      try {
+        const run = await apiGet('/api/runs/' + runId);
+        const jobs = Object.entries(run.jobs || {}).map(function(entry) {
+          const jid = entry[0], j = entry[1];
+          const icon = j.status === 'success' ? '✅' : j.status === 'running' ? '🔄' :
+                       j.status === 'failure' ? '❌' : j.status === 'cancelled' ? '🚫' : '⏳';
+          return '<div>' + icon + ' ' + jid + ' <span class="badge ' + j.status + '">' + j.status + '</span></div>';
+        }).join('');
+        document.getElementById('mon-detail').innerHTML =
+          '<p><strong>run_id:</strong> ' + run.run_id + '</p>' +
+          '<p><strong>status:</strong> <span class="badge ' + run.status + '">' + run.status + '</span></p>' +
+          '<p><strong>duration:</strong> ' + (run.duration ? run.duration.toFixed(1) + 's' : '-') + '</p>' +
+          '<div style="margin-top:10px;"><strong>Jobs:</strong></div>' +
+          '<div style="margin-top:6px;">' + (jobs || '<p class="empty-state">无</p>') + '</div>' +
+          '<div style="margin-top:14px;display:flex;gap:8px;">' +
+          '<button class="btn btn-danger" onclick="cancelRun(\'' + run.run_id + '\')">取消</button>' +
+          '<button class="btn" onclick="resumeRun(\'' + run.run_id + '\')">续跑</button>' +
+          '</div>';
+      } catch(e) { console.error('loadRunDetail failed:', e); }
+    }
+
+    function connectWebSocket(runId) {
+      if (state.ws) { state.ws.close(); state.ws = null; }
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      state.ws = new WebSocket(proto + '://' + location.host + '/ws/runs/' + runId);
+      state.ws.onopen = function() { updateWsStatus('connected'); };
+      state.ws.onmessage = function(e) { handleWsEvent(JSON.parse(e.data)); };
+      state.ws.onclose = function() { updateWsStatus('disconnected'); };
+      state.ws.onerror = function() { updateWsStatus('disconnected'); };
+    }
+
+    function handleWsEvent(event) {
+      const logBox = document.getElementById('mon-log');
+      const ts = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '';
+      const ev = event.event || '';
+      const jid = event.job_id || '';
+      const sid = event.step_id || '';
+      const line = '<div class="log-line"><span class="ts">[' + ts + ']</span> <span class="ev">' + ev + '</span> ' + jid + ' ' + sid + '</div>';
+      logBox.innerHTML += line;
+      logBox.scrollTop = logBox.scrollHeight;
+      if (ev.indexOf('job.') === 0 || ev.indexOf('workflow.') === 0) {
+        loadRunDetail(state.activeRunId);
+      }
+    }
+
+    async function cancelRun(runId) {
+      try { await apiPost('/api/runs/' + runId + '/cancel', {}); loadRunDetail(runId); }
+      catch(e) { alert('取消失败: ' + e.message); }
+    }
+    async function resumeRun(runId) {
+      try { await apiPost('/api/runs/' + runId + '/resume', {}); selectRun(runId); }
+      catch(e) { alert('续跑失败: ' + e.message); }
+    }
+
+    // ── Decision tab (M6) ──
+    async function loadCompletedRuns() {
+      try {
+        const data = await apiGet('/api/runs?status=success');
+        const sel = document.getElementById('dec-run');
+        sel.innerHTML = '<option value="">-- 选择 run --</option>' +
+          data.runs.map(r => '<option value="' + r.run_id + '">' + r.run_id.substring(0, 24) + '... (' + (r.duration ? r.duration.toFixed(1) + 's' : '?') + ')</option>').join('');
+      } catch(e) { console.error('loadCompletedRuns failed:', e); }
+    }
+
+    async function loadDecision(runId) {
+      if (!runId) { document.getElementById('dec-content').innerHTML = ''; return; }
+      try {
+        const run = await apiGet('/api/runs/' + runId);
+        const decide = (run.jobs && run.jobs.decide && run.jobs.decide.outputs) || {};
+        const synthesize = (run.jobs && run.jobs.synthesize && run.jobs.synthesize.outputs) || {};
+        const venueName = decide.venue || 'unknown';
+        const venue = state.venues.find(v => v.name === venueName);
+        const scoreMax = decide.score_range ? decide.score_range[1] : (venue ? venue.score_max : 10);
+
+        var html = '<div class="card"><div class="card-header">推荐决定</div><div class="card-body">' +
+          '<p><strong>Recommendation:</strong> <span class="badge success">' + (decide.recommendation || '?') + '</span></p>' +
+          '<p><strong>Weighted Score:</strong> ' + (decide.weighted_score || '?') + ' / ' + scoreMax + '</p>' +
+          '<p><strong>Venue:</strong> ' + venueName + '</p>' +
+          '<p><strong>Score Range:</strong> ' + (decide.score_range ? decide.score_range.join('-') : '?') + '</p>' +
+          '</div></div>';
+
+        if (decide.per_dimension) {
+          var bars = Object.entries(decide.per_dimension).map(function(entry) {
+            const dim = entry[0], d = entry[1];
+            const pct = (d.score / scoreMax) * 100;
+            return '<div class="score-bar"><span class="label">' + dim + '</span>' +
+              '<div class="bar"><div class="fill" style="width:' + pct + '%"></div></div>' +
+              '<span class="val">' + d.score + '/' + scoreMax + ' (conf: ' + (d.confidence || '?') + ')</span></div>';
+          }).join('');
+          html += '<div class="card"><div class="card-header">各维度分数</div><div class="card-body">' + bars + '</div></div>';
+        }
+
+        if (decide.key_strengths && decide.key_strengths.length) {
+          html += '<div class="card"><div class="card-header">关键评估</div><div class="card-body">';
+          html += '<strong>优点:</strong><ul>' + decide.key_strengths.map(s => '<li>' + s + '</li>').join('') + '</ul>';
+          if (decide.key_concerns && decide.key_concerns.length) {
+            html += '<strong>担忧:</strong><ul>' + decide.key_concerns.map(s => '<li>' + s + '</li>').join('') + '</ul>';
+          }
+          html += '</div></div>';
+        }
+
+        if (decide.decision_rationale) {
+          html += '<div class="card"><div class="card-header">Rationale</div><div class="card-body">' + decide.decision_rationale + '</div></div>';
+        }
+
+        if (synthesize.review_path) {
+          html += '<div class="card"><div class="card-header">综合评审 (review.md)</div><div class="card-body">' +
+            '<p>review.md 路径: <code>' + synthesize.review_path + '</code></p>' +
+            '<p>请用 <code>cat ' + synthesize.review_path + '</code> 查看</p>' +
+            '</div></div>';
+        }
+
+        document.getElementById('dec-content').innerHTML = html;
+      } catch(e) {
+        document.getElementById('dec-content').innerHTML = '<p>加载失败: ' + e.message + '</p>';
+      }
+    }
+
+    // ── Init ──
+    (async function init() {
+      try {
+        await loadVenues();
+        await loadWorkflows();
+        await loadRuns();
+      } catch(e) { console.error('init failed:', e); }
+      updateWsStatus('disconnected');
+      setInterval(loadRuns, 5000);
+    })();
+  </script>
+</body>
+</html>
