@@ -17,6 +17,10 @@ class ProviderRegistry:
     def _register_builtin(self) -> None:
         from .anthropic_provider import AnthropicProvider
         self.register("anthropic", AnthropicProvider)
+        from .openai_provider import OpenAIProvider
+        self.register("openai", OpenAIProvider)
+        from .deepseek_provider import DeepSeekProvider
+        self.register("deepseek", DeepSeekProvider)
 
     def register(self, name: str, provider_cls: Type[LLMProvider]) -> None:
         self._providers[name] = provider_cls

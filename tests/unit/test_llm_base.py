@@ -67,3 +67,28 @@ def test_anthropic_provider_registered_by_default():
     ProviderRegistry._instance = None
     reg = ProviderRegistry()
     assert "anthropic" in reg.list_providers()
+
+
+def test_registry_has_3_providers():
+    """ProviderRegistry should auto-register anthropic, openai, deepseek"""
+    ProviderRegistry._instance = None
+    reg = ProviderRegistry()
+    providers = reg.list_providers()
+    assert "anthropic" in providers
+    assert "openai" in providers
+    assert "deepseek" in providers
+    assert len(providers) == 3
+
+
+def test_registry_get_openai_provider():
+    ProviderRegistry._instance = None
+    reg = ProviderRegistry()
+    provider_cls = reg.get("openai")
+    assert provider_cls.provider_name == "openai"
+
+
+def test_registry_get_deepseek_provider():
+    ProviderRegistry._instance = None
+    reg = ProviderRegistry()
+    provider_cls = reg.get("deepseek")
+    assert provider_cls.provider_name == "deepseek"
