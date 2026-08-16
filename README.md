@@ -69,6 +69,23 @@ curl -X POST http://localhost:8000/api/runs \
   -d '{"workflow_name": "neurips-paper-review", "inputs": {"paper_source": "2402.12098"}}'
 ```
 
+## Web UI
+
+The FastAPI server includes a built-in web frontend. Start the server:
+
+```bash
+python main.py server
+```
+
+Then open `http://localhost:8000/` in your browser. The frontend provides 4 tabs:
+
+1. **装配 (Assemble)**: Select venue, adjust dimension weights, generate + download YAML, register & dispatch
+2. **触发 (Dispatch)**: Select a registered workflow, enter paper_source, dispatch a review
+3. **监控 (Monitor)**: List all runs, click to view real-time progress via WebSocket, cancel/resume
+4. **决策 (Decision)**: Select a completed run, view recommendation + per-dimension scores + rationale
+
+The frontend is a single-file pure HTML/JS/CSS app (`paper_review_workflow/api/static/index.html`) — zero build step, zero npm dependencies.
+
 ## Output Structure
 
 Each run creates a session directory:
