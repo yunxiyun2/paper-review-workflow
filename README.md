@@ -150,6 +150,37 @@ To dispatch a review under a specific venue, set `VENUE` in the workflow `env` b
 
 See `configs/neurips_review.yaml` for the default NeurIPS 3-dimension review config. Venue configs (dimensions, score ranges, weights, thresholds) are in `configs/venues/`.
 
+## Multi-Provider LLM Support
+
+The engine supports 3 LLM providers:
+
+| Provider | Env Var | Default Model | Structured Output |
+|----------|---------|---------------|-------------------|
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` | tool use (strict) |
+| OpenAI | `OPENAI_API_KEY` | (user must set `LLM_MODEL`) | json_schema (strict) |
+| DeepSeek | `DEEPSEEK_API_KEY` | (user must set `LLM_MODEL`) | json_object + prompt schema |
+
+Switch providers via environment variables:
+
+```bash
+# OpenAI
+export LLM_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+export LLM_MODEL=gpt-4o  # user specifies current model name
+
+# DeepSeek
+export LLM_PROVIDER=deepseek
+export DEEPSEEK_API_KEY=sk-...
+export LLM_MODEL=deepseek-chat
+
+# Anthropic (default)
+export LLM_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+# LLM_MODEL defaults to claude-sonnet-4-6
+```
+
+All providers share the same retry strategy (3x exponential backoff) and schema validation (`SchemaValidationError` on invalid LLM output).
+
 ## Testing
 
 ```bash
