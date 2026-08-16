@@ -1,12 +1,14 @@
 """FastAPI app factory + endpoints + WebSocket."""
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..engine import ReviewEngine
 from ..storage import StorageBackend, MemoryStorage, JsonFileStorage
@@ -79,6 +81,32 @@ def create_app(
         total = len(runs)
         active = sum(1 for r in runs if r.status in (WorkflowStatus.PENDING, WorkflowStatus.RUNNING))
         return HealthResponse(status="ok", version="0.1.0", active_runs=active, total_runs=total)
+
+    @app.get("/api/venues")
+    async def list_venues():
+        """Return all venue configs for the frontend assembler."""
+        from ..core.venue_config import VenueConfig
+
+        venues_dir = os.environ.get("PAPER_REVIEW_CONFIGS_DIR", "configs/venues")
+        venues = []
+        for yml_file in sorted(Path(venues_dir).glob("*.yaml")):
+            try:
+                # Clear cache for dev-mode hot reload
+                VenueConfig._cache.pop(yml_file.stem, None)
+                config = VenueConfig.from_yaml(str(yml_file))
+                venues.append({
+                    "name": config.name,
+                    "display_name": config.display_name,
+                    "dimensions": config.dimensions,
+                    "score_min": config.score_min,
+                    "score_max": config.score_max,
+                    "weights": config.weights,
+                    "thresholds": [{"threshold": t, "label": l} for t, l in config.thresholds],
+                    "prompts_dir": config.prompts_dir,
+                })
+            except Exception as e:
+                logger.warning(f"[API] failed to load venue {yml_file}: {e}")
+        return {"total": len(venues), "venues": venues}
 
     @app.get("/api/workflows")
     async def list_workflows():
@@ -274,6 +302,20 @@ def create_app(
             ws_manager.remove_connection(filtered)
 
     # Other endpoints added in subsequent tasks
+
+    # ── Static files + root route (Phase 2 #3) ──
+    _static_dir = Path(__file__).parent / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def root():
+        """Serve the frontend index.html."""
+        index_path = _static_dir / "index.html"
+        if index_path.exists():
+            return FileResponse(str(index_path), media_type="text/html")
+        return HTMLResponse("<h1>Frontend not built yet</h1>", status_code=404)
+
     return app
 
 
