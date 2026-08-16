@@ -181,6 +181,21 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 All providers share the same retry strategy (3x exponential backoff) and schema validation (`SchemaValidationError` on invalid LLM output).
 
+## Export
+
+Export review results as OpenReview XML:
+
+```bash
+# CLI
+python main.py export <run_id> --format xml
+python main.py export <run_id> --output report.xml
+
+# API
+curl http://localhost:8000/api/runs/<run_id>/export?format=xml > report.xml
+```
+
+The XML follows the standard OpenReview note format with 5 fields: recommendation, confidence, review, soundness, contribution.
+
 ## Testing
 
 ```bash
