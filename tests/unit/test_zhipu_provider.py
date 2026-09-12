@@ -115,3 +115,60 @@ def test_zhipu_schema_validation_error(mock_cls):
             max_tokens=4096,
             response_schema=DimensionScore,
         )
+
+
+@patch("openai.OpenAI")
+def test_zhipu_extracts_json_from_markdown_fence(mock_cls):
+    """glm-5.3 (thinking model) sometimes wraps JSON in markdown fences"""
+    mock_client = mock_cls.return_value
+    fenced = "```json\n" + _valid_score_json() + "\n```"
+    mock_client.chat.completions.create.return_value = _make_openai_response(fenced)
+
+    provider = ZhipuProvider(api_key="zhu-test")
+    result = provider.complete(
+        system="score", messages=[{"role": "user", "content": "paper"}],
+        model="glm-5.3", max_tokens=8192, response_schema=DimensionScore,
+    )
+    assert result.structured.score == 4
+
+
+@patch("openai.OpenAI")
+def test_zhipu_repairs_schema_validation_failure(mock_cls):
+    """On SchemaValidationError the provider retries with the error fed back"""
+    mock_client = mock_cls.return_value
+    too_long = json.dumps({
+        "score": 4, "confidence": 0.9,
+        "strengths": ["s"], "weaknesses": ["w"],
+        "justification": "x" * 900,  # exceeds 800-char limit
+        "evidence": [],
+    })
+    mock_client.chat.completions.create.side_effect = [
+        _make_openai_response(too_long),
+        _make_openai_response(_valid_score_json()),
+    ]
+
+    provider = ZhipuProvider(api_key="zhu-test")
+    result = provider.complete(
+        system="score", messages=[{"role": "user", "content": "paper"}],
+        model="glm-5.3", max_tokens=8192, response_schema=DimensionScore,
+    )
+    assert result.structured.score == 4
+    assert mock_client.chat.completions.create.call_count == 2
+    second_call = mock_client.chat.completions.create.call_args_list[1]
+    system_content = second_call.kwargs["messages"][0]["content"]
+    assert "FAILED validation" in system_content
+    assert "800" in system_content  # the original error is fed back
+
+
+@patch("openai.OpenAI")
+def test_zhipu_empty_content_raises_for_repair(mock_cls):
+    mock_client = mock_cls.return_value
+    mock_client.chat.completions.create.return_value = _make_openai_response("")
+
+    provider = ZhipuProvider(api_key="zhu-test")
+    from paper_review_workflow.llm.base import SchemaValidationError
+    with pytest.raises(SchemaValidationError):
+        provider.complete(
+            system="score", messages=[{"role": "user", "content": "paper"}],
+            model="glm-5.3", max_tokens=8192, response_schema=DimensionScore,
+        )

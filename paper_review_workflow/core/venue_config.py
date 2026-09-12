@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, Dict, List, Optional, Type
 import yaml
+from ..llm.schemas import EvidenceItem
 from pydantic import BaseModel, Field, create_model
 
 
@@ -61,6 +62,6 @@ class VenueConfig:
             strengths=(List[str], Field(min_length=1, max_length=5)),
             weaknesses=(List[str], Field(min_length=1, max_length=5)),
             justification=(str, Field(min_length=100, max_length=800)),
-            evidence=(List[dict], Field(default_factory=list)),
+            evidence=(List[EvidenceItem], Field(default_factory=list, max_length=5)),
             __base__=BaseModel,
         )

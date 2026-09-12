@@ -10,10 +10,22 @@ def test_dimension_score_valid():
         score=4, confidence=0.85,
         strengths=["a", "b"], weaknesses=["c"],
         justification="x" * 200,
-        evidence=[{"section": "3.2", "quote": "...", "page": 5}],
+        evidence=[{"location": "§3.2", "quote": "..."}],
     )
     assert s.score == 4
     assert s.confidence == 0.85
+    assert s.evidence[0].location == "§3.2"
+
+
+def test_dimension_score_rejects_placeholder_evidence():
+    "Evidence entries without a real location/quote must fail validation."
+    with pytest.raises(ValidationError):
+        DimensionScore(
+            score=4, confidence=0.85,
+            strengths=["a"], weaknesses=["c"],
+            justification="x" * 200,
+            evidence=[{"section": "?", "page": "?"}],
+        )
 
 
 def test_dimension_score_out_of_range_high():

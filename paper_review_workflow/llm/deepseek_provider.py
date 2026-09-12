@@ -45,10 +45,10 @@ class DeepSeekProvider(LLMProvider):
         if response_schema:
             response_format = {"type": "json_object"}
 
-        openai_messages = [{"role": "system", "content": system_text}] + messages
-
+        repair_note = ""
         for attempt in range(self.MAX_RETRIES):
             try:
+                openai_messages = [{"role": "system", "content": system_text + repair_note}] + messages
                 resp = self._client.chat.completions.create(
                     model=model,
                     max_tokens=max_tokens,
@@ -57,6 +57,19 @@ class DeepSeekProvider(LLMProvider):
                     response_format=response_format,
                 )
                 return self._parse_response(resp, response_schema, model)
+            except SchemaValidationError as e:
+                # Self-repair loop: feed the validation error back and let the
+                # model correct its own output (covers over-length fields,
+                # schema echo, truncated/fenced JSON...).
+                if attempt >= self.MAX_RETRIES - 1:
+                    raise
+                repair_note = (
+                    "\n\nYour previous response FAILED validation with this error:\n"
+                    + str(e)
+                    + "\nRespond again with a single corrected JSON object that strictly "
+                    "matches the schema. Fix the reported problem (e.g. keep string fields "
+                    "within their length limits). Output the JSON object only."
+                )
             except Exception as e:
                 if self._is_rate_limit(e):
                     if attempt == self.MAX_RETRIES - 1:
@@ -103,13 +116,21 @@ class DeepSeekProvider(LLMProvider):
         return node
 
     def _parse_response(self, resp, schema, model):
-        text_content = resp.choices[0].message.content
+        message = resp.choices[0].message
+        text_content = (message.content or "").strip()
         structured = None
         if schema:
+            if not text_content:
+                raise SchemaValidationError(
+                    "model returned empty content"
+                    + ("" if not getattr(message, "reasoning_content", None)
+                       else " (reasoning present but no final content — "
+                            "try a larger max_tokens so thinking does not exhaust the budget)")
+                )
+            data = json.loads(self._extract_json(text_content))
             try:
-                data = json.loads(text_content)
                 structured = schema(**data)
-            except (json.JSONDecodeError, ValidationError) as e:
+            except ValidationError as e:
                 raise SchemaValidationError(f"LLM output failed schema validation: {e}")
         usage = {
             "input_tokens": resp.usage.prompt_tokens,
@@ -124,6 +145,25 @@ class DeepSeekProvider(LLMProvider):
             model=model,
             raw=resp,
         )
+
+    @staticmethod
+    def _extract_json(text: str) -> str:
+        """Pull the JSON object out of a model response: strips markdown code
+        fences and, failing that, slices from the first '{' to the last '}'."""
+        import re
+        t = text.strip()
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```\s*$", "", t)
+        try:
+            json.loads(t)
+            return t
+        except json.JSONDecodeError:
+            start, end = t.find("{"), t.rfind("}")
+            if start != -1 and end > start:
+                candidate = t[start:end + 1]
+                json.loads(candidate)  # raise JSONDecodeError if still broken
+                return candidate
+            raise
 
     def _is_rate_limit(self, e):
         try:

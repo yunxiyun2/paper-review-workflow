@@ -143,3 +143,52 @@ def test_from_env_openai_missing_llm_model_raises(monkeypatch):
     from paper_review_workflow.llm.base import LLMError
     with pytest.raises(LLMError, match="LLM_MODEL not set"):
         LLMClient.from_env()
+
+
+def test_complete_streams_reasoning_content(monkeypatch):
+    """Thinking models' reasoning_content should be streamed via log_callback"""
+    from types import SimpleNamespace
+    from paper_review_workflow.llm.base import LLMResponse
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    LLMClient._instance = None
+    client = LLMClient.from_env()
+
+    raw = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+        reasoning_content="先分析方法的可靠性。\n再检查实验设计。"))])
+    resp = LLMResponse(text="final", structured=None,
+                       usage={"input_tokens": 10, "output_tokens": 5},
+                       model="test-model", raw=raw)
+    client._provider = MagicMock()
+    client._provider.provider_name = "anthropic"
+    client._provider.complete.return_value = resp
+
+    lines = []
+    out = client.complete(system="s", messages=[{"role": "user", "content": "u"}],
+                          log_callback=lines.append)
+    assert out.text == "final"
+    think = [l for l in lines if l.startswith("💭 [思考]")]
+    assert len(think) == 2
+    assert "先分析方法的可靠性。" in think[0]
+    # usage line comes after thinking lines
+    assert lines[-1].startswith("📥")
+
+
+def test_complete_without_reasoning_skips_think_lines(monkeypatch):
+    from types import SimpleNamespace
+    from paper_review_workflow.llm.base import LLMResponse
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    LLMClient._instance = None
+    client = LLMClient.from_env()
+
+    raw = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="final"))])
+    resp = LLMResponse(text="final", structured=None, usage={}, model="m", raw=raw)
+    client._provider = MagicMock()
+    client._provider.provider_name = "anthropic"
+    client._provider.complete.return_value = resp
+
+    lines = []
+    client.complete(system="s", messages=[{"role": "user", "content": "u"}],
+                    log_callback=lines.append)
+    assert not [l for l in lines if l.startswith("💭")]

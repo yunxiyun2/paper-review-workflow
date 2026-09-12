@@ -149,6 +149,13 @@ class DimensionAction(BaseAction):
         template = _jinja_env.get_template(template_path)
         return template.render(metadata=metadata, dimension=dimension)
 
+    @staticmethod
+    def _evidence_dicts(score) -> list:
+        """Evidence entries as plain dicts (EvidenceItem models from the LLM
+        schema are not JSON serializable; old score.json dicts pass through)."""
+        return [e.model_dump() if hasattr(e, "model_dump") else e
+                for e in (score.evidence or [])]
+
     def _write_score_json(self, path: Path, score, dimension: str, venue: str,
                           model: str, usage: dict) -> None:
         payload = {
@@ -160,7 +167,7 @@ class DimensionAction(BaseAction):
             "strengths": score.strengths,
             "weaknesses": score.weaknesses,
             "justification": score.justification,
-            "evidence": score.evidence,
+            "evidence": self._evidence_dicts(score),
             "model_used": model,
             "usage": usage,
         }
@@ -184,8 +191,12 @@ class DimensionAction(BaseAction):
         ]
         if score.evidence:
             lines.extend(["", "## Evidence"])
-            for ev in score.evidence:
-                lines.append(f"- §{ev.get('section', '?')}, p.{ev.get('page', '?')}: {ev.get('quote', '')[:100]}")
+            for ev in self._evidence_dicts(score):
+                location = (ev.get("location") or ev.get("section") or ev.get("claim") or "").strip()
+                quote = (ev.get("quote") or ev.get("evidence") or "").strip()
+                if not quote:
+                    continue  # skip placeholder entries like "§?, p.?:"
+                lines.append(f"- {location or '?'}: {quote[:160]}")
         path.write_text("\n".join(lines))
 
 

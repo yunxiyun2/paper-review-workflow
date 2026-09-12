@@ -46,7 +46,7 @@ class LLMClient:
         client = cls(
             provider=provider,
             model=model,
-            max_tokens=int(src.get("LLM_MAX_TOKENS", "4096")),
+            max_tokens=int(src.get("LLM_MAX_TOKENS", "8192")),
             temperature=float(src.get("LLM_TEMPERATURE", "0.0")),
         )
         if env is None:
@@ -82,6 +82,10 @@ class LLMClient:
         )
         elapsed = time.monotonic() - t0
         if log_callback:
+            # Thinking models (e.g. GLM-5.x) return their reasoning separately
+            # from the final content — stream it before the usage summary.
+            for para in self._iter_reasoning(resp):
+                log_callback(f"💭 [思考] {para}")
             usage = resp.usage or {}
             log_callback(
                 f"📥 LLM 返回 ← 输入 {usage.get('input_tokens', '?')} tokens / "
@@ -89,6 +93,21 @@ class LLMClient:
                 f"模型 {resp.model}"
             )
         return resp
+
+    @staticmethod
+    def _iter_reasoning(resp):
+        """Yield non-empty paragraphs of the model's thinking/reasoning text,
+        if the raw provider response carries one."""
+        try:
+            msg = resp.raw.choices[0].message
+            reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
+        except Exception:
+            return
+        if not reasoning or not isinstance(reasoning, str):
+            return
+        for para in reasoning.strip().split("\n"):
+            if para.strip():
+                yield para.strip()
 
     def score(self, system: str, user_content: str, schema: Type[BaseModel],
               cached_context: Optional[str] = None) -> BaseModel:
