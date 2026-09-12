@@ -21,6 +21,8 @@ class ProviderRegistry:
         self.register("openai", OpenAIProvider)
         from .deepseek_provider import DeepSeekProvider
         self.register("deepseek", DeepSeekProvider)
+        from .zhipu_provider import ZhipuProvider
+        self.register("zhipu", ZhipuProvider)
 
     def register(self, name: str, provider_cls: Type[LLMProvider]) -> None:
         self._providers[name] = provider_cls

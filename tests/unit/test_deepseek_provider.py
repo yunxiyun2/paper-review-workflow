@@ -81,8 +81,8 @@ def test_deepseek_schema_embedded_in_system_prompt(mock_cls):
 
     call_kwargs = mock_client.chat.completions.create.call_args.kwargs
     system_content = call_kwargs["messages"][0]["content"]
-    # System prompt should contain "JSON matching this schema"
-    assert "JSON matching this schema" in system_content
+    # System prompt should contain the output contract (anti-echo instruction)
+    assert "never repeat or echo the schema" in system_content
     # And should contain the schema properties (e.g., "score", "confidence")
     assert "score" in system_content
     assert "confidence" in system_content

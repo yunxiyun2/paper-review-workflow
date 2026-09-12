@@ -27,8 +27,10 @@ class OpenAIProvider(LLMProvider):
         self._client = OpenAI(api_key=api_key)
 
     @classmethod
-    def from_env(cls) -> "OpenAIProvider":
-        api_key = os.environ.get("OPENAI_API_KEY")
+    def from_env(cls, env=None) -> "OpenAIProvider":
+        import os
+        src = env if env is not None else os.environ
+        api_key = src.get("OPENAI_API_KEY")
         if not api_key:
             raise LLMError("OPENAI_API_KEY not set")
         return cls(api_key=api_key)

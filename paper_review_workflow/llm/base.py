@@ -32,12 +32,15 @@ class SchemaValidationError(LLMError):
 
 class LLMProvider(ABC):
     provider_name: str = ""
+    # Optional per-provider fallback model (used when LLM_MODEL is unset)
+    DEFAULT_MODEL: str = ""
 
     @classmethod
     @abstractmethod
-    def from_env(cls) -> "LLMProvider":
+    def from_env(cls, env=None) -> "LLMProvider":
         """Read provider-specific env vars and construct the provider.
-        Each subclass implements this to read its own API key + config."""
+        Each subclass implements this to read its own API key + config.
+        `env` may be a per-run mapping (e.g. workflow env); defaults to os.environ."""
         ...
 
     @abstractmethod

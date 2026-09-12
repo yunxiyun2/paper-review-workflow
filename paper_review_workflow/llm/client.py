@@ -1,6 +1,6 @@
 """LLMClient: convenience layer delegating to a provider chosen by env."""
 import os
-from typing import Optional, Type, Union
+from typing import Dict, Optional, Type, Union
 from pydantic import BaseModel
 
 from .base import LLMProvider, LLMResponse
@@ -18,29 +18,39 @@ class LLMClient:
         self.temperature = temperature
 
     @classmethod
-    def from_env(cls) -> "LLMClient":
-        if cls._instance is None:
-            provider_name = os.environ.get("LLM_PROVIDER", "anthropic")
-            registry = ProviderRegistry()
-            provider_cls = registry.get(provider_name)
-            provider = provider_cls.from_env()
+    def from_env(cls, env: Optional[Dict[str, str]] = None) -> "LLMClient":
+        """Build a client from an env mapping (defaults to os.environ).
 
-            # Anthropic has default model; others require LLM_MODEL
-            model = os.environ.get("LLM_MODEL")
-            if not model:
-                if provider_name == "anthropic":
-                    model = "claude-sonnet-4-6"
-                else:
-                    from .base import LLMError
-                    raise LLMError(f"LLM_MODEL not set (required for provider '{provider_name}')")
+        The os.environ path keeps the process-wide singleton; a per-run `env`
+        mapping (e.g. workflow env with user-supplied API keys) always builds a
+        fresh instance so concurrent runs never leak credentials into each other.
+        """
+        if env is None and cls._instance is not None:
+            return cls._instance
+        src = env if env is not None else os.environ
+        provider_name = src.get("LLM_PROVIDER", "anthropic")
+        registry = ProviderRegistry()
+        provider_cls = registry.get(provider_name)
+        provider = provider_cls.from_env(src)
 
-            cls._instance = cls(
-                provider=provider,
-                model=model,
-                max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "4096")),
-                temperature=float(os.environ.get("LLM_TEMPERATURE", "0.0")),
-            )
-        return cls._instance
+        # Anthropic/zhipu have default models; others require LLM_MODEL
+        model = src.get("LLM_MODEL") or getattr(provider_cls, "DEFAULT_MODEL", "")
+        if not model:
+            if provider_name == "anthropic":
+                model = "claude-sonnet-4-6"
+            else:
+                from .base import LLMError
+                raise LLMError(f"LLM_MODEL not set (required for provider '{provider_name}')")
+
+        client = cls(
+            provider=provider,
+            model=model,
+            max_tokens=int(src.get("LLM_MAX_TOKENS", "4096")),
+            temperature=float(src.get("LLM_TEMPERATURE", "0.0")),
+        )
+        if env is None:
+            cls._instance = client
+        return client
 
     @classmethod
     def reset(cls) -> None:

@@ -69,15 +69,16 @@ def test_anthropic_provider_registered_by_default():
     assert "anthropic" in reg.list_providers()
 
 
-def test_registry_has_3_providers():
-    """ProviderRegistry should auto-register anthropic, openai, deepseek"""
+def test_registry_has_4_providers():
+    """ProviderRegistry should auto-register anthropic, openai, deepseek, zhipu"""
     ProviderRegistry._instance = None
     reg = ProviderRegistry()
     providers = reg.list_providers()
     assert "anthropic" in providers
     assert "openai" in providers
     assert "deepseek" in providers
-    assert len(providers) == 3
+    assert "zhipu" in providers
+    assert len(providers) == 4
 
 
 def test_registry_get_openai_provider():

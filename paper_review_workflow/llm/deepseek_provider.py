@@ -29,8 +29,10 @@ class DeepSeekProvider(LLMProvider):
         self._client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
     @classmethod
-    def from_env(cls) -> "DeepSeekProvider":
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
+    def from_env(cls, env=None) -> "DeepSeekProvider":
+        import os
+        src = env if env is not None else os.environ
+        api_key = src.get("DEEPSEEK_API_KEY")
         if not api_key:
             raise LLMError("DEEPSEEK_API_KEY not set")
         return cls(api_key=api_key)
@@ -79,13 +81,26 @@ class DeepSeekProvider(LLMProvider):
                 parts.append(system)
         else:
             parts.extend(system)
-        # Append schema description for DeepSeek (doesn't support json_schema natively)
+        # Append schema description for DeepSeek/Zhipu (no native json_schema support).
+        # Strip "title" keys first — they are pure noise and models sometimes echo
+        # schema metadata back instead of producing content.
         if response_schema:
+            schema = self._strip_keys(response_schema.model_json_schema(), {"title"})
             parts.append(
-                "You must respond with JSON matching this schema:\n" +
-                json.dumps(response_schema.model_json_schema(), indent=2)
+                "OUTPUT CONTRACT: Respond with a single JSON object that conforms to this "
+                "JSON schema. Output the JSON object itself — never repeat or echo the schema.\n"
+                "JSON schema:\n" + json.dumps(schema, indent=2)
             )
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _strip_keys(node, keys_to_remove):
+        if isinstance(node, dict):
+            return {k: DeepSeekProvider._strip_keys(v, keys_to_remove)
+                    for k, v in node.items() if k not in keys_to_remove}
+        if isinstance(node, list):
+            return [DeepSeekProvider._strip_keys(v, keys_to_remove) for v in node]
+        return node
 
     def _parse_response(self, resp, schema, model):
         text_content = resp.choices[0].message.content
