@@ -256,8 +256,12 @@ def create_app(
 
         # paper_source points at the uploaded file; mode selects the venue;
         # user-confirmed weights override the venue defaults via WEIGHT_* env.
+        # provider/model are persisted (non-secret) so resume can rebuild the
+        # LLM env even after a server restart.
         run.trigger_payload["paper_source"] = str(pdf_path)
         run.trigger_payload["task_name"] = task_name.strip() or "未命名评审"
+        run.trigger_payload["provider"] = provider
+        run.trigger_payload["model"] = model.strip()
         run.env.update(weight_env)
         engine.storage.save_run(run)
 
@@ -350,13 +354,31 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
-        # Apply rerun options
-        if req.rerun_all:
-            engine._reset_all_components(run)
-        elif req.rerun_components:
-            engine._mark_for_rerun(run, req.rerun_components)
+        # Per-venue review workflows are registered dynamically; re-register
+        # the definition if it was lost (server restart cleared the registry).
+        wf_name = (run.env or {}).get("__workflow_name__", "")
+        if wf_name.startswith("review-") and engine.get_workflow_def(wf_name) is None:
+            venue = wf_name.removeprefix("review-")
+            try:
+                engine.register_workflow(_build_review_workflow_yaml(venue), name=wf_name)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"cannot rebuild workflow: {e}")
 
-        background_tasks.add_task(_run_in_background, engine, run_id)
+        # Rebuild the LLM execution env: in-memory key first, else the key
+        # supplied with the resume request; provider/model from persisted inputs.
+        secret_env = dict(_pending_secrets.get(run_id) or {})
+        payload = run.trigger_payload or {}
+        if req.api_key:
+            provider = payload.get("provider", "zhipu")
+            secret_env["LLM_PROVIDER"] = provider
+            secret_env["LLM_MODEL"] = payload.get("model") or secret_env.get("LLM_MODEL", "")
+            secret_env[f"{provider.upper()}_API_KEY"] = req.api_key
+            _pending_secrets[run_id] = secret_env
+
+        background_tasks.add_task(
+            _resume_in_background, engine, run_id,
+            req.rerun_components, req.rerun_all,
+        )
         return {"run_id": run_id, "status": "pending", "message": "resume scheduled"}
 
     def _find_step_output(run: WorkflowRun, key: str):
@@ -610,4 +632,17 @@ async def _run_in_background(engine: ReviewEngine, run_id: str) -> None:
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(
         None, lambda: engine.execute_existing_run(run_id, secret_env=secret_env)
+    )
+
+
+async def _resume_in_background(engine: ReviewEngine, run_id: str,
+                                rerun_components=None, rerun_all: bool = False) -> None:
+    """Resume a failed/interrupted run: reset failed+downstream jobs, keep
+    completed ones, then re-execute (in a thread pool)."""
+    secret_env = _pending_secrets.get(run_id)
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        lambda: engine.resume_run(run_id, rerun_components=rerun_components,
+                                  rerun_all=rerun_all, secret_env=secret_env),
     )

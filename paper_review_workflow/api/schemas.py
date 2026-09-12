@@ -26,6 +26,7 @@ class ResumeRequest(BaseModel):
     """POST /api/runs/{run_id}/resume — resume a run."""
     rerun_components: Optional[List[str]] = None
     rerun_all: bool = False
+    api_key: Optional[str] = Field(default=None, description="Provider API key if not held in server memory")
 
 
 class RunResponse(BaseModel):

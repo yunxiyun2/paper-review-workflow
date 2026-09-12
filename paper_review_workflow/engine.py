@@ -75,13 +75,21 @@ class ReviewEngine:
 
     def resume_run(self, run_id: str,
                    rerun_components: Optional[List[str]] = None,
-                   rerun_all: bool = False) -> WorkflowRun:
+                   rerun_all: bool = False,
+                   secret_env: Optional[Dict[str, str]] = None) -> WorkflowRun:
         run = self.storage.get_run(run_id)
         if run is None:
             raise ValueError(f"run not found: {run_id}")
-        # Reload workflow_def from original YAML
-        if run.workflow_def is None and run.env.get("__workflow_file__"):
-            run.workflow_def = self.parser.parse_file(run.env["__workflow_file__"])
+        # Recover workflow_def: from YAML file, or from the in-memory registry
+        # for dynamically registered workflows (no file on disk).
+        if run.workflow_def is None:
+            wf_file = run.env.get("__workflow_file__")
+            if wf_file:
+                run.workflow_def = self.parser.parse_file(wf_file)
+            else:
+                run.workflow_def = self._workflow_defs.get(run.env.get("__workflow_name__"))
+            if run.workflow_def is None:
+                raise ValueError(f"workflow definition not found for run {run_id}")
         if rerun_all:
             self._reset_all_components(run)
         elif rerun_components:
@@ -92,7 +100,9 @@ class ReviewEngine:
             # This is the "resume from failure" path: completed jobs are
             # preserved, failed + downstream jobs are re-run.
             self._reset_failed_and_downstream(run)
-        return self._do_execute(run)
+        if secret_env:
+            run.env.update(secret_env)
+        return self._do_execute(run, secret_keys=set(secret_env or {}))
 
     # -- Control --
 

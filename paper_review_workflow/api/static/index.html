@@ -149,12 +149,14 @@
     .badge.success { background: var(--tint-success); color: var(--success); }
     .badge.failure { background: var(--tint-failure); color: var(--failure); }
     .badge.cancelled { background: var(--tint-cancelled); color: var(--cancelled); }
+    .badge.skipped { background: var(--tint-pending); color: var(--pending); }
     .jdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 2px; vertical-align: baseline; }
     .jdot.success { background: var(--success); }
     .jdot.running { background: var(--running); }
     .jdot.failure { background: var(--failure); }
     .jdot.cancelled { background: var(--cancelled); }
     .jdot.pending { background: var(--pending); }
+    .jdot.skipped { background: var(--text3); }
     /* ── Forms ── */
     input, select, textarea {
       background: var(--surface); border: 1px solid var(--border-strong); color: var(--text);
@@ -714,7 +716,11 @@
       catch(e) { alert('取消失败: ' + e.message); }
     }
     async function resumeRun(runId) {
-      try { await apiPost('/api/runs/' + runId + '/resume', {}); selectRun(runId); }
+      // The key may no longer be in server memory (e.g. after a restart) —
+      // let the user supply one; empty input relies on the stored key.
+      const apiKey = prompt('续跑需要调用模型。请输入 API Key（若服务端仍保留 key，可直接留空）：');
+      if (apiKey === null) return;
+      try { await apiPost('/api/runs/' + runId + '/resume', { api_key: apiKey || null }); selectRun(runId); }
       catch(e) { alert('续跑失败: ' + e.message); }
     }
 
