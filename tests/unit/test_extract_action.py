@@ -1,10 +1,8 @@
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 from paper_review_workflow.actions.extract import ExtractAction
-from paper_review_workflow.actions.base import ActionResult
 
 
 def test_extract_local_pdf_success(tmp_path):
@@ -24,11 +22,12 @@ def test_extract_local_pdf_success(tmp_path):
     assert result.success
     out_dir = session_dir / "00_extract"
     assert (out_dir / "metadata.json").exists()
-    assert (out_dir / "sections.json").exists()
     assert (out_dir / "full_text.md").exists()
-    assert (out_dir / "references.json").exists()
+    # sections.json / references.json were removed (no downstream consumer)
+    assert not (out_dir / "sections.json").exists()
+    assert not (out_dir / "references.json").exists()
 
-    meta = json.loads((out_dir / "metadata.json").read_text())
+    meta = json.loads((out_dir / "metadata.json").read_text(encoding="utf-8"))
     assert "title" in meta
     assert isinstance(meta["authors"], list)
 
@@ -37,46 +36,48 @@ def test_extract_local_pdf_success(tmp_path):
     assert result.outputs["full_text_path"].endswith("full_text.md")
 
 
-def test_extract_unsupported_source(tmp_path):
-    session_dir = tmp_path / "session"
-    session_dir.mkdir()
+def test_extract_rejects_non_pdf_path(tmp_path):
+    """A local file that merely *contains* an arXiv-like number must NOT be
+    hijacked into any other branch — only real .pdf files are accepted."""
+    fake = tmp_path / "papers" / "2401.12345.txt"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("not a pdf")
 
     action = ExtractAction()
     result = action.run(
-        params={"source": "not-a-pdf-or-arxiv-id", "session_dir": str(session_dir)},
+        params={"source": str(fake), "session_dir": str(tmp_path / "s")},
         env={}, context={}, log_callback=lambda x: None,
     )
     assert not result.success
-    assert "unsupported source" in result.message
+    assert "only local PDF files" in result.message
 
 
-@patch("paper_review_workflow.actions.extract.arxiv.fetch_arxiv")
-@patch("paper_review_workflow.actions.extract.pdf.parse_pdf")
-def test_extract_arxiv_id(mock_parse, mock_fetch, tmp_path):
-    # Setup mocks
-    session_dir = tmp_path / "session"
-    session_dir.mkdir()
-    pdf_path = session_dir / "00_extract" / "artifacts" / "paper.pdf"
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_path.write_bytes(b"fake pdf")
-
-    mock_fetch.return_value = {
-        "pdf_path": str(pdf_path), "latex_tarball": None, "arxiv_id": "2402.12098"
-    }
-    mock_parse.return_value = {
-        "metadata": {"title": "Test Paper", "authors": ["A"], "abstract": "abs",
-                     "doi": None, "arxiv_id": None, "keywords": []},
-        "sections": [{"title": "Intro", "level": 1, "text": "...", "page_start": 0, "page_end": 0}],
-        "full_text": "Intro ...",
-        "references": [],
-    }
-
+def test_extract_rejects_arxiv_id():
+    """arXiv IDs / URLs are no longer a supported import path."""
     action = ExtractAction()
     result = action.run(
-        params={"source": "2402.12098", "session_dir": str(session_dir)},
+        params={"source": "2402.12098", "session_dir": "/tmp/x"},
         env={}, context={}, log_callback=lambda x: None,
     )
+    assert not result.success
+    assert "only local PDF files" in result.message
 
-    assert result.success
-    meta = json.loads((session_dir / "00_extract" / "metadata.json").read_text())
-    assert meta["arxiv_id"] == "2402.12098"
+
+def test_extract_rejects_missing_pdf(tmp_path):
+    action = ExtractAction()
+    result = action.run(
+        params={"source": str(tmp_path / "missing.pdf"), "session_dir": str(tmp_path / "s")},
+        env={}, context={}, log_callback=lambda x: None,
+    )
+    assert not result.success
+    assert "only local PDF files" in result.message
+
+
+def test_extract_rejects_empty_source():
+    action = ExtractAction()
+    result = action.run(
+        params={"source": "  ", "session_dir": "/tmp/x"},
+        env={}, context={}, log_callback=lambda x: None,
+    )
+    assert not result.success
+    assert "source is required" in result.message

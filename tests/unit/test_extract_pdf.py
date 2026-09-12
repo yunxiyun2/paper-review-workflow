@@ -3,7 +3,7 @@ from pathlib import Path
 from paper_review_workflow.actions.extract.pdf import parse_pdf
 
 
-def test_parse_pdf_returns_metadata_sections_fulltext(tmp_path):
+def test_parse_pdf_returns_metadata_and_fulltext(tmp_path):
     fixture = Path("tests/fixtures/sample_paper.pdf")
     if not fixture.exists():
         pytest.skip("fixture missing")
@@ -11,13 +11,13 @@ def test_parse_pdf_returns_metadata_sections_fulltext(tmp_path):
     result = parse_pdf(str(fixture))
 
     assert "metadata" in result
-    assert "sections" in result
     assert "full_text" in result
-    assert "references" in result
+    # sections/references were removed (no downstream consumer)
+    assert "sections" not in result
+    assert "references" not in result
     assert isinstance(result["metadata"]["title"], str)
     assert len(result["metadata"]["title"]) > 0
-    assert len(result["sections"]) >= 1
-    assert "Introduction" in result["full_text"] or "introduction" in result["full_text"].lower()
+    assert len(result["full_text"]) > 0
 
 
 def test_parse_pdf_nonexistent_file():

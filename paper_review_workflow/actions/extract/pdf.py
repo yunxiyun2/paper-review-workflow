@@ -1,4 +1,10 @@
-"""PDF parsing using PyMuPDF (fitz)."""
+"""PDF parsing using PyMuPDF (fitz).
+
+Produces exactly what downstream consumers use: metadata (title/authors/
+abstract feed the review prompts) and full_text (the LLM's paper text).
+Sections/references extraction was removed — it was line-heuristic based,
+unreliable on real PDFs, and consumed by nothing.
+"""
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -6,24 +12,18 @@ from typing import Dict, List
 import pymupdf as fitz  # PyMuPDF
 
 
-SECTION_TITLE_RE = re.compile(
-    r"^(?:\d+\.?\d*\.?\d*\s+)?(Abstract|Introduction|Background|Related Work|"
-    r"Method(?:s)?|Approach|Model|Experiments?|Results?|Evaluation|"
-    r"Discussion|Conclusion[s]?|References|Acknowledgments?)\s*$",
-    re.IGNORECASE,
-)
-
-
 def parse_pdf(pdf_path: str) -> Dict:
-    """Parse a PDF file into metadata, sections, full_text, references.
+    """Parse a PDF file into metadata and full text.
 
     Returns:
         {
             "metadata": {"title", "authors", "abstract", "doi", "arxiv_id", "keywords"},
-            "sections": [{"title", "level", "text", "page_start", "page_end"}],
-            "full_text": str (markdown),
-            "references": [{"raw", "page"}],
+            "full_text": str,
         }
+
+    Raises:
+        ValueError: if the PDF yields (almost) no text — likely a scanned/
+            image-only document that would need OCR.
     """
     path = Path(pdf_path)
     if not path.exists():
@@ -31,19 +31,22 @@ def parse_pdf(pdf_path: str) -> Dict:
 
     doc = fitz.open(str(path))
     try:
-        pages_text = [page.get_text("text") for page in doc]
-        full_text = "\n\n".join(pages_text)
+        # sort=True orders blocks top-to-bottom/left-to-right, which keeps
+        # single-column layouts and two-column layouts substantially more
+        # readable than the raw insertion order.
+        pages_text = [page.get_text("text", sort=True) for page in doc]
+        full_text = "\n\n".join(p.strip() for p in pages_text if p.strip())
+
+        total_chars = sum(len(p) for p in pages_text)
+        if total_chars < max(200, 50 * len(pages_text)):
+            raise ValueError(
+                f"PDF contains almost no extractable text "
+                f"({total_chars} chars across {len(pages_text)} pages) — "
+                "it is likely a scanned/image-only document and would need OCR"
+            )
 
         metadata = _extract_metadata(doc, pages_text)
-        sections = _extract_sections(pages_text)
-        references = _extract_references(pages_text)
-
-        return {
-            "metadata": metadata,
-            "sections": sections,
-            "full_text": full_text,
-            "references": references,
-        }
+        return {"metadata": metadata, "full_text": full_text}
     finally:
         doc.close()
 
@@ -95,56 +98,11 @@ def _extract_metadata(doc, pages_text: List[str]) -> Dict:
 
 
 def _extract_abstract(pages_text: List[str]) -> str:
-    full = "\n".join(pages_text)
+    # Anchor on the first page only — searching the whole document can hit an
+    # "Abstract" heading in the body or references.
+    first_page = pages_text[0] if pages_text else ""
     m = re.search(r"Abstract[:\s]*(.+?)(?=\n\s*(?:1\.?\s+)?(?:Introduction|Keywords|I\.\s))",
-                  full, re.IGNORECASE | re.DOTALL)
+                  first_page, re.IGNORECASE | re.DOTALL)
     if m:
         return m.group(1).strip()[:2000]
     return ""
-
-
-def _extract_sections(pages_text: List[str]) -> List[Dict]:
-    sections = []
-    current = None
-
-    for page_idx, page_text in enumerate(pages_text):
-        for line in page_text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            m = SECTION_TITLE_RE.match(stripped)
-            if m:
-                if current:
-                    current["page_end"] = page_idx
-                    sections.append(current)
-                current = {
-                    "title": stripped,
-                    "level": 1 if not stripped[0].isdigit() else
-                             (len(stripped.split()[0].rstrip(".").split("."))),
-                    "text": "",
-                    "page_start": page_idx,
-                    "page_end": page_idx,
-                }
-            elif current:
-                current["text"] += stripped + "\n"
-
-    if current:
-        sections.append(current)
-    return sections
-
-
-def _extract_references(pages_text: List[str]) -> List[Dict]:
-    refs = []
-    in_refs = False
-    for page_idx, page_text in enumerate(pages_text):
-        for line in page_text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if re.match(r"^References\s*$", stripped, re.IGNORECASE):
-                in_refs = True
-                continue
-            if in_refs:
-                if re.match(r"^\[\d+\]", stripped) or stripped[0:1].isupper():
-                    refs.append({"raw": stripped, "page": page_idx})
-    return refs
