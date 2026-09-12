@@ -7,7 +7,7 @@ from paper_review_workflow.core.venue_config import VenueConfig
 def test_venue_config_load_neurips():
     config = VenueConfig.load("neurips")
     assert config.name == "neurips"
-    assert config.display_name == "NeurIPS 2025"
+    assert config.display_name == "NeurIPS"
     assert config.dimensions == ["soundness", "presentation", "contribution"]
     assert config.score_min == 1
     assert config.score_max == 10

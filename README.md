@@ -18,14 +18,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## Quick Start
 
-Review an arXiv paper:
-
-```bash
-python main.py run configs/neurips_review.yaml \
-    --payload '{"paper_source": "2402.12098"}'
-```
-
-Review a local PDF:
+Review a local PDF (the import path is PDF-only; arXiv/URL import has been removed):
 
 ```bash
 python main.py run configs/neurips_review.yaml \
@@ -80,7 +73,7 @@ python main.py server
 Then open `http://localhost:8000/` in your browser. The frontend provides 4 tabs:
 
 1. **装配 (Assemble)**: Select venue, adjust dimension weights, generate + download YAML, register & dispatch
-2. **触发 (Dispatch)**: Select a registered workflow, enter paper_source, dispatch a review
+2. **发起评审 (Review)**: Name the task, select a venue (with adjustable dimension weights), upload a PDF, pick a model, paste your API key (per-request, held in memory only), execute. The task name shows up in the monitor list.
 3. **监控 (Monitor)**: List all runs, click to view real-time progress via WebSocket, cancel/resume
 4. **决策 (Decision)**: Select a completed run, view recommendation + per-dimension scores + rationale
 
@@ -91,14 +84,11 @@ The frontend is a single-file pure HTML/JS/CSS app (`paper_review_workflow/api/s
 Each run creates a session directory:
 
 ```
-sessions/<paper_id>/<run_id>/
-  run.json                    # Full run state (lwf storage)
-  run_manifest.json           # Static archive
+sessions/<run_id>/
+  run.json                    # Full run state (lwf storage, under sessions/runs/)
   00_extract/                 # Parsed paper
     metadata.json
-    sections.json
     full_text.md
-    references.json
   10_dim_soundness/            # 3 dimension scores (parallel)
     score.json
     review.md
@@ -159,6 +149,7 @@ The engine supports 3 LLM providers:
 | Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` | tool use (strict) |
 | OpenAI | `OPENAI_API_KEY` | (user must set `LLM_MODEL`) | json_schema (strict) |
 | DeepSeek | `DEEPSEEK_API_KEY` | (user must set `LLM_MODEL`) | json_object + prompt schema |
+| Zhipu (智谱) | `ZHIPU_API_KEY` | `glm-4.6` | json_object + prompt schema |
 
 Switch providers via environment variables:
 
@@ -173,11 +164,23 @@ export LLM_PROVIDER=deepseek
 export DEEPSEEK_API_KEY=sk-...
 export LLM_MODEL=deepseek-chat
 
+# Zhipu (智谱)
+export LLM_PROVIDER=zhipu
+export ZHIPU_API_KEY=...
+# LLM_MODEL defaults to glm-4.6
+
 # Anthropic (default)
 export LLM_PROVIDER=anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
 # LLM_MODEL defaults to claude-sonnet-4-6
 ```
+
+API keys can also be supplied **per request** (no env var needed) via the upload
+flow: `POST /api/review` accepts a PDF + `task_name` + `api_key` + `model` + `venue`
+as multipart form fields. The key is held in memory only (masked in any persisted
+state) until explicitly deleted via `POST /api/runs/{run_id}/delete-key`, or
+`DELETE /api/runs/{run_id}` removes the key, the session directory (PDF, artifacts,
+reports) and the run record entirely.
 
 All providers share the same retry strategy (3x exponential backoff) and schema validation (`SchemaValidationError` on invalid LLM output).
 

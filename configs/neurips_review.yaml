@@ -29,14 +29,12 @@ jobs:
       paper_id: ${{ steps.extract.outputs.paper_id }}
       full_text_path: ${{ steps.extract.outputs.full_text_path }}
       metadata_path: ${{ steps.extract.outputs.metadata_path }}
-      sections_path: ${{ steps.extract.outputs.sections_path }}
-      references_path: ${{ steps.extract.outputs.references_path }}
     steps:
       - id: extract
         uses: paper-review/extract@v1
         with:
           source: ${{ inputs.paper_source }}
-          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.RUN_ID }}
 
   dimensions:
     name: "📊 维度打分"
@@ -50,7 +48,7 @@ jobs:
       - uses: paper-review/dim_score@v1
         with:
           dimension: ${{ matrix.dimension }}
-          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.RUN_ID }}
           full_text_path: ${{ needs.extract.outputs.full_text_path }}
           metadata_path: ${{ needs.extract.outputs.metadata_path }}
 
@@ -65,14 +63,19 @@ jobs:
       - id: synthesize
         uses: paper-review/synthesize@v1
         with:
-          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.RUN_ID }}
 
   decide:
     name: "🎯 推荐决定"
     needs: synthesize
     runs-on: local
+    outputs:
+      recommendation: ${{ steps.decide.outputs.recommendation }}
+      weighted_score: ${{ steps.decide.outputs.weighted_score }}
+      decision_path: ${{ steps.decide.outputs.decision_path }}
     steps:
-      - uses: paper-review/decide@v1
+      - id: decide
+        uses: paper-review/decide@v1
         with:
-          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.PAPER_ID }}/${{ env.RUN_ID }}
+          session_dir: ${{ env.SESSIONS_ROOT }}/${{ env.RUN_ID }}
           scores_path: ${{ needs.synthesize.outputs.scores_path }}

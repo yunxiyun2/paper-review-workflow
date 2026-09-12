@@ -1,5 +1,5 @@
 name: icml
-display_name: "ICML 2025"
+display_name: "ICML"
 
 dimensions:
   - soundness
