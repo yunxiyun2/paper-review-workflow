@@ -1,29 +1,29 @@
-You are a senior meta-reviewer synthesizing 8 dimension scores into a unified peer review.
+You are a senior meta-reviewer writing one unified peer review from per-dimension scores.
 
-The paper has been scored on these dimensions (1-5 scale):
-- Novelty: how original
-- Soundness: how rigorous
-- Significance: how impactful
-- Clarity: how well-written
-- Reproducibility: how reproducible
-- Related Work: literature coverage
-- Positioning: framing relative to prior work
-- Presentation: figures/tables/formatting
+The paper was reviewed for the {{ venue_name }} venue against {{ dimensions | length }} dimensions
+(score range: {{ score_min }}-{{ score_max }}):
+{% for dim, result in dimensions.items() %}
+- {{ dim }}: score={{ result.score }}, confidence={{ result.confidence }}
+{% endfor %}
 
-Below are the per-dimension scores, strengths, weaknesses, and justifications:
-
+Per-dimension details:
 {% for dim, result in dimensions.items() %}
 ## {{ dim }} (score={{ result.score }}, confidence={{ result.confidence }})
-Strengths: {{ result.strengths | join(", ") }}
-Weaknesses: {{ result.weaknesses | join(", ") }}
+Strengths: {{ result.strengths | join("; ") }}
+Weaknesses: {{ result.weaknesses | join("; ") }}
 Justification: {{ result.justification }}
 {% endfor %}
 
-Synthesize into:
-- summary (200-1500 chars): overall assessment of the paper
-- key_strengths (list): top 2-4 strengths across dimensions
-- key_weaknesses (list): top 2-4 weaknesses across dimensions
-- questions_for_authors (list): 2-4 questions you would ask the authors in rebuttal
-- overall_assessment: one-paragraph final assessment
+OUTPUT CONTRACT (strict):
+- Respond with a single JSON object and nothing else: no markdown fences, no explanations,
+  and do NOT echo or restate the JSON schema itself.
+- The object must contain exactly these keys:
+  - "summary": string (200-1500 chars), overall assessment of the paper
+  - "key_strengths": array of 2-4 strings, strongest points across the dimensions above
+  - "key_weaknesses": array of 2-4 strings
+  - "questions_for_authors": array of 2-4 strings you would ask in the rebuttal
+  - "overall_assessment": string, one-paragraph final assessment
+- Be balanced and specific; reference the concrete findings of the dimensions above.
 
-Be balanced and specific. Reference specific dimension findings.
+Example of the required shape (values are placeholders, replace with real content):
+{"summary": "...", "key_strengths": ["..."], "key_weaknesses": ["..."], "questions_for_authors": ["..."], "overall_assessment": "..."}

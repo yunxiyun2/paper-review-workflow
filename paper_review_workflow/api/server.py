@@ -2,10 +2,11 @@
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, Query
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,13 @@ from .schemas import (
 from .ws_manager import WSManager, FilteredWS
 
 logger = logging.getLogger(__name__)
+
+# Per-run credentials (user-supplied API keys) live in this in-memory map only —
+# never written to disk, and stripped from run.env by the engine before any
+# persistence. Retained until the user explicitly deletes them via
+# POST /api/runs/{run_id}/delete-key (or deletes the whole run).
+_pending_secrets: dict = {}
+SUPPORTED_VENUES = ("neurips", "icml", "acl")
 
 
 def create_app(
@@ -121,6 +129,7 @@ def create_app(
                     "dispatch_inputs": _extract_dispatch_inputs(wf_def),
                 }
                 for name, wf_def in defs.items()
+                if wf_def.jobs  # skip venue param configs loaded as empty workflow defs
             ],
         }
 
@@ -176,6 +185,102 @@ def create_app(
             "message": "review dispatched, see GET /api/runs/{run_id} for status",
         }
 
+    @app.post("/api/review", status_code=202)
+    async def create_review(
+        background_tasks: BackgroundTasks,
+        pdf: UploadFile = File(..., description="论文 PDF 文件"),
+        api_key: str = Form(..., description="用户提供的 LLM API key"),
+        model: str = Form(..., description="模型名, 如 glm-5.3"),
+        provider: str = Form("zhipu", description="LLM 提供商"),
+        venue: str = Form("neurips", description="评审会议: neurips/icml/acl"),
+        weights: str = Form("{}", description='维度权重 JSON, 如 {"soundness": 1.5}'),
+        task_name: str = Form("", description="任务名称, 显示在监控列表"),
+    ):
+        """Ephemeral review flow: upload PDF + per-request credentials, execute,
+        then auto-delete artifacts and the key. Nothing is persisted."""
+        provider = provider.strip().lower()
+        from ..llm.registry import ProviderRegistry
+        try:
+            ProviderRegistry().get(provider)
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"unsupported provider: {provider} "
+                                                       f"(available: {ProviderRegistry().list_providers()})")
+        venue = venue.strip().lower()
+        if venue not in SUPPORTED_VENUES:
+            raise HTTPException(status_code=400, detail=f"unsupported venue: {venue} (available: {list(SUPPORTED_VENUES)})")
+        if not model.strip():
+            raise HTTPException(status_code=400, detail="model is required")
+        if pdf.filename and not pdf.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="only PDF files are accepted")
+
+        # Parse + validate dimension weights against the venue's dimensions
+        import json as _json
+        from ..core.venue_config import VenueConfig
+        try:
+            weight_map = _json.loads(weights) if weights and weights.strip() else {}
+        except _json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="weights must be valid JSON")
+        if not isinstance(weight_map, dict):
+            raise HTTPException(status_code=400, detail="weights must be a JSON object")
+        try:
+            venue_dims = VenueConfig.load(venue).dimensions
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        weight_env = {}
+        for dim, value in weight_map.items():
+            if dim not in venue_dims:
+                raise HTTPException(status_code=400,
+                                    detail=f"dimension '{dim}' not in venue '{venue}' (dims: {venue_dims})")
+            try:
+                w = float(value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"weight for '{dim}' must be a number")
+            if not (0.1 <= w <= 3.0):
+                raise HTTPException(status_code=400, detail=f"weight for '{dim}' out of range [0.1, 3.0]")
+            weight_env[f"WEIGHT_{dim.upper()}"] = str(w)
+
+        # Build + register a workflow whose dimension matrix matches the venue,
+        # so ICML/ACL run their own 4 dimensions instead of NeurIPS's 3.
+        workflow_name = f"review-{venue}"
+        engine.register_workflow(_build_review_workflow_yaml(venue), name=workflow_name)
+
+        # Allocate the run first so the upload lands inside its session dir
+        run = engine.dispatch_workflow(workflow_name, {"mode": venue})
+        upload_dir = Path(engine.sessions_root).resolve() / run.id / "upload"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = upload_dir / "paper.pdf"
+        content = await pdf.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="uploaded PDF is empty")
+        pdf_path.write_bytes(content)
+
+        # paper_source points at the uploaded file; mode selects the venue;
+        # user-confirmed weights override the venue defaults via WEIGHT_* env.
+        run.trigger_payload["paper_source"] = str(pdf_path)
+        run.trigger_payload["task_name"] = task_name.strip() or "未命名评审"
+        run.env.update(weight_env)
+        engine.storage.save_run(run)
+
+        # Credentials stay in memory only; they are never persisted and stay
+        # available (for resume) until explicitly deleted via the API.
+        _pending_secrets[run.id] = {
+            "LLM_PROVIDER": provider,
+            "LLM_MODEL": model.strip(),
+            f"{provider.upper()}_API_KEY": api_key,
+        }
+        background_tasks.add_task(_run_in_background, engine, run.id)
+
+        return {
+            "run_id": run.id,
+            "workflow_name": workflow_name,
+            "task_name": run.trigger_payload["task_name"],
+            "status": run.status.value,
+            "provider": provider,
+            "model": model.strip(),
+            "venue": venue,
+            "message": "review dispatched; API key stays in memory until deleted via the API",
+        }
+
     @app.get("/api/runs")
     async def list_runs(
         status: Optional[str] = Query(None),
@@ -196,6 +301,36 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
         return _serialize_run_full(run)
+
+    @app.post("/api/runs/{run_id}/delete-key")
+    async def delete_run_key(run_id: str):
+        """Drop the in-memory API key for this run (manual privacy control)."""
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        secret = _pending_secrets.pop(run_id, None)
+        if secret:
+            return {"run_id": run_id, "deleted": True,
+                    "message": "API key 已从内存中删除"}
+        return {"run_id": run_id, "deleted": False,
+                "message": "该 run 没有保存中的 API key（可能已删除，或未通过上传评审创建）"}
+
+    @app.delete("/api/runs/{run_id}")
+    async def delete_run(run_id: str):
+        """Delete a run entirely: in-memory key, session dir (uploaded PDF,
+        artifacts, reports) and the run record."""
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        if run_id in engine._active_runs:
+            raise HTTPException(status_code=409,
+                                detail="run 正在执行中，请先取消再删除")
+        _pending_secrets.pop(run_id, None)
+        session_dir = Path(engine.sessions_root).resolve() / run_id
+        shutil.rmtree(session_dir, ignore_errors=True)
+        engine.storage.delete_run(run_id)
+        logger.info(f"[delete] removed key/session/record for run {run_id}")
+        return {"run_id": run_id, "deleted": True, "message": "任务已删除"}
 
     @app.post("/api/runs/{run_id}/cancel")
     async def cancel_run(run_id: str):
@@ -224,6 +359,54 @@ def create_app(
         background_tasks.add_task(_run_in_background, engine, run_id)
         return {"run_id": run_id, "status": "pending", "message": "resume scheduled"}
 
+    def _find_step_output(run: WorkflowRun, key: str):
+        """Locate an output value across all jobs/steps of a run (decide/synthesize
+        write file paths into their step outputs)."""
+        for job in run.jobs.values():
+            if key in (job.outputs or {}):
+                return job.outputs[key]
+            for step in job.steps:
+                if key in (step.outputs or {}):
+                    return step.outputs[key]
+        return None
+
+    @app.get("/api/runs/{run_id}/decision")
+    async def get_run_decision(run_id: str):
+        """Full decision payload (per-dimension scores, strengths/concerns, rationale)."""
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        decision_path = _find_step_output(run, "decision_path")
+        if not decision_path or not Path(decision_path).is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=f"decision not available yet for run {run_id} (decide step has not completed)",
+            )
+        import json as _json
+        return _json.loads(Path(decision_path).read_text(encoding="utf-8"))
+
+    @app.get("/api/runs/{run_id}/review")
+    async def get_run_review(run_id: str):
+        """Serve the synthesized review markdown for a completed run."""
+        run = engine.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        review_path = _find_step_output(run, "review_path")
+        candidates = []
+        if review_path:
+            candidates.append(Path(review_path))
+        if candidates and candidates[0].parent.parent.name:
+            # sibling final_report.md produced by the decide step
+            candidates.append(candidates[0].parent.parent / "final_report.md")
+        for p in candidates:
+            if p.is_file():
+                from fastapi.responses import Response
+                return Response(
+                    content=p.read_text(encoding="utf-8"),
+                    media_type="text/markdown; charset=utf-8",
+                )
+        raise HTTPException(status_code=404, detail=f"review not available yet for run {run_id}")
+
     @app.get("/api/runs/{run_id}/export")
     async def export_run(run_id: str, format: str = "xml"):
         run = engine.storage.get_run(run_id)
@@ -238,10 +421,19 @@ def create_app(
         from fastapi.responses import Response
         return Response(content=xml, media_type="application/xml")
 
+    def _workflow_name_of(run: WorkflowRun) -> str:
+        if run.workflow_def:
+            return run.workflow_def.name
+        return (run.env or {}).get("__workflow_name__", "")
+
+    def _task_name_of(run: WorkflowRun) -> str:
+        return (run.trigger_payload or {}).get("task_name", "")
+
     def _serialize_run_brief(run: WorkflowRun) -> dict:
         return {
             "run_id": run.id,
-            "workflow_name": run.workflow_def.name if run.workflow_def else "",
+            "workflow_name": _workflow_name_of(run),
+            "task_name": _task_name_of(run),
             "status": run.status.value,
             "start_time": run.start_time.isoformat() if run.start_time else None,
             "end_time": run.end_time.isoformat() if run.end_time else None,
@@ -252,7 +444,8 @@ def create_app(
     def _serialize_run_full(run: WorkflowRun) -> dict:
         return {
             "run_id": run.id,
-            "workflow_name": run.workflow_def.name if run.workflow_def else "",
+            "workflow_name": _workflow_name_of(run),
+            "task_name": _task_name_of(run),
             "status": run.status.value,
             "start_time": run.start_time.isoformat() if run.start_time else None,
             "end_time": run.end_time.isoformat() if run.end_time else None,
@@ -333,7 +526,87 @@ def create_app(
     return app
 
 
+def _build_review_workflow_yaml(venue: str) -> str:
+    """Build a review workflow whose dimension matrix matches the venue's own
+    dimensions (NeurIPS 3 / ICML 4 / ACL 4)."""
+    from ..core.venue_config import VenueConfig
+    dims = VenueConfig.load(venue).dimensions
+    matrix = ", ".join(dims)
+    session_dir = "${{ env.SESSIONS_ROOT }}/${{ env.RUN_ID }}"
+    return (
+        f"name: review-{venue}\n\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      paper_source:\n"
+        '        description: "Paper PDF path"\n'
+        "        required: true\n"
+        "        type: string\n\n"
+        "env:\n"
+        "  SESSIONS_ROOT: ./sessions\n"
+        f"  VENUE: {venue}\n\n"
+        "jobs:\n"
+        "  extract:\n"
+        "    runs-on: local\n"
+        "    outputs:\n"
+        "      full_text_path: ${{ steps.extract.outputs.full_text_path }}\n"
+        "      metadata_path: ${{ steps.extract.outputs.metadata_path }}\n"
+        "    steps:\n"
+        "      - id: extract\n"
+        "        uses: paper-review/extract@v1\n"
+        "        with:\n"
+        "          source: ${{ inputs.paper_source }}\n"
+        f"          session_dir: {session_dir}\n"
+        "  dimensions:\n"
+        "    needs: extract\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        f"        dimension: [{matrix}]\n"
+        f"      max-parallel: {len(dims)}\n"
+        "    runs-on: local\n"
+        "    steps:\n"
+        "      - uses: paper-review/dim_score@v1\n"
+        "        with:\n"
+        "          dimension: ${{ matrix.dimension }}\n"
+        f"          session_dir: {session_dir}\n"
+        "          full_text_path: ${{ needs.extract.outputs.full_text_path }}\n"
+        "          metadata_path: ${{ needs.extract.outputs.metadata_path }}\n"
+        "  synthesize:\n"
+        "    needs: dimensions\n"
+        "    runs-on: local\n"
+        "    outputs:\n"
+        "      review_path: ${{ steps.synthesize.outputs.review_path }}\n"
+        "      scores_path: ${{ steps.synthesize.outputs.scores_path }}\n"
+        "    steps:\n"
+        "      - id: synthesize\n"
+        "        uses: paper-review/synthesize@v1\n"
+        "        with:\n"
+        f"          session_dir: {session_dir}\n"
+        "  decide:\n"
+        "    needs: synthesize\n"
+        "    runs-on: local\n"
+        "    outputs:\n"
+        "      recommendation: ${{ steps.decide.outputs.recommendation }}\n"
+        "      weighted_score: ${{ steps.decide.outputs.weighted_score }}\n"
+        "      decision_path: ${{ steps.decide.outputs.decision_path }}\n"
+        "    steps:\n"
+        "      - id: decide\n"
+        "        uses: paper-review/decide@v1\n"
+        "        with:\n"
+        f"          session_dir: {session_dir}\n"
+        "          scores_path: ${{ needs.synthesize.outputs.scores_path }}\n"
+    )
+
+
 async def _run_in_background(engine: ReviewEngine, run_id: str) -> None:
-    """Background task: run engine in thread pool to avoid blocking event loop."""
+    """Background task: run engine in thread pool to avoid blocking event loop.
+
+    The per-run API key is READ from _pending_secrets (not popped) — it stays
+    in server memory, available for resume, until the user deletes it via
+    POST /api/runs/{run_id}/delete-key or deletes the whole run.
+    """
+    secret_env = _pending_secrets.get(run_id)
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, lambda: engine.execute_existing_run(run_id))
+    await loop.run_in_executor(
+        None, lambda: engine.execute_existing_run(run_id, secret_env=secret_env)
+    )

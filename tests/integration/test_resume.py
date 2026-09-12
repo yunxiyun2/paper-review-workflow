@@ -81,7 +81,7 @@ jobs:
     needs: extract
     strategy:
       matrix:
-        dimension: [soundness, presentation]
+        dimension: [soundness, presentation, contribution]
       max-parallel: 2
     runs-on: local
     steps:

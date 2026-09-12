@@ -81,7 +81,7 @@ jobs:
     needs: extract
     strategy:
       matrix:
-        dimension: [soundness, presentation]
+        dimension: [soundness, presentation, contribution]
       max-parallel: 2
     runs-on: local
     steps:
@@ -122,8 +122,7 @@ jobs:
     # re-registered cleanly before either run.
     ActionRegistry._instance = None
 
-    # First run succeeds.  Patch MIN_DIMENSIONS down to 2 since the test
-    # workflow only has 2 dimensions (soundness, presentation) instead of 3.
+    # First run succeeds (all 3 NeurIPS dimensions run via the matrix).
     with patch.object(SynthesizeAction, "MIN_DIMENSIONS", 2):
         with patch("paper_review_workflow.llm.client.LLMClient.from_env") as mock_from_env:
             mock_client = MagicMock()

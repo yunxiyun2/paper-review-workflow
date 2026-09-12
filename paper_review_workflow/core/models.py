@@ -189,6 +189,6 @@ class WorkflowRun:
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "duration": self.duration,
             "run_number": self.run_number,
-            "env": self.env,
+            "env": {k: ("***" if k.endswith("_API_KEY") else v) for k, v in self.env.items()},
             "jobs": {k: v.to_dict() for k, v in self.jobs.items()},
         }

@@ -24,7 +24,7 @@ _jinja_env = Environment(
 class SynthesizeAction(BaseAction):
     """Read dim score.json files, call LLM, write review.md + scores.json."""
 
-    MIN_DIMENSIONS = 6  # require at least 6 to synthesize
+    MIN_DIMENSIONS = 2  # absolute floor when venue config is unavailable
 
     @property
     def description(self) -> str:
@@ -34,9 +34,12 @@ class SynthesizeAction(BaseAction):
         session_dir = Path(params["session_dir"])
 
         venue_name = env.get("VENUE", "neurips")
+        score_min = score_max = None
         try:
             venue_config = VenueConfig.load(venue_name)
             dimensions = venue_config.dimensions
+            score_min = venue_config.score_min
+            score_max = venue_config.score_max
         except ValueError:
             dimensions = []
 
@@ -60,16 +63,20 @@ class SynthesizeAction(BaseAction):
         if log_callback:
             log_callback(f"loaded {len(dim_results)} dimensions, missing: {missing}")
 
-        if len(dim_results) < self.MIN_DIMENSIONS:
+        # Require all of the venue's dimensions; fall back to a small floor
+        # only when no venue config could be loaded.
+        min_required = len(dimensions) if dimensions else self.MIN_DIMENSIONS
+        if len(dim_results) < min_required:
             return ActionResult(
                 success=False,
-                message=f"too many missing dimensions ({len(missing)} missing, need >= {self.MIN_DIMENSIONS})",
+                message=f"too many missing dimensions ({len(missing)} missing, need >= {min_required})",
             )
 
-        prompt = self._render_prompt(dim_results)
+        prompt = self._render_prompt(dim_results, venue_name=venue_name,
+                                     score_min=score_min, score_max=score_max)
         dim_summary = json.dumps(dim_results, ensure_ascii=False, default=str)
 
-        client = LLMClient.from_env()
+        client = LLMClient.from_env(env)
         response = client.complete(
             system=prompt,
             messages=[{"role": "user", "content": dim_summary}],
@@ -88,6 +95,19 @@ class SynthesizeAction(BaseAction):
         if log_callback:
             log_callback(f"synthesis complete: {len(synthesis.key_strengths)} strengths, "
                         f"{len(synthesis.key_weaknesses)} weaknesses")
+            # Stream the synthesized meta-review so users see it in real time
+            summary = (synthesis.summary or "").strip()
+            for para in summary.split("\n"):
+                if para.strip():
+                    log_callback(f"📝 [综合评审] {para.strip()}")
+            if synthesis.key_strengths:
+                log_callback("✅ [综合评审] 优点: " + "；".join(synthesis.key_strengths))
+            if synthesis.key_weaknesses:
+                log_callback("⚠️ [综合评审] 不足: " + "；".join(synthesis.key_weaknesses))
+            if synthesis.questions_for_authors:
+                log_callback("❓ [综合评审] 作者需回应的问题: " + "；".join(synthesis.questions_for_authors))
+            if synthesis.overall_assessment:
+                log_callback(f"🎯 [综合评审] 总体评价: {synthesis.overall_assessment.strip()}")
 
         return ActionResult(
             success=True,
@@ -97,9 +117,11 @@ class SynthesizeAction(BaseAction):
             },
         )
 
-    def _render_prompt(self, dim_results: dict) -> str:
+    def _render_prompt(self, dim_results: dict, venue_name: str,
+                       score_min: int, score_max: int) -> str:
         template = _jinja_env.get_template("synthesize.j2")
-        return template.render(dimensions=dim_results)
+        return template.render(dimensions=dim_results, venue_name=venue_name,
+                               score_min=score_min, score_max=score_max)
 
     def _write_review_md(self, path: Path, synthesis: SynthesisResult,
                          dim_results: dict) -> None:

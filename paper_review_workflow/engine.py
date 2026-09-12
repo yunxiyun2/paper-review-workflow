@@ -22,6 +22,7 @@ class ReviewEngine:
         self.parser = WorkflowParser()
         self.registry = ActionRegistry()
         self.event_bus = EventBus()
+        self.sessions_root = sessions_root
         self.storage = storage if storage is not None else JsonFileStorage(sessions_root)
         self.storage.open()
 
@@ -58,6 +59,8 @@ class ReviewEngine:
         # Apply CLI env overrides (take precedence over wf_def.env)
         if extra_env:
             run.env.update(extra_env)
+        # Runtime identity env vars referenced by workflow YAML (${{ env.RUN_ID }})
+        run.env["RUN_ID"] = run.id
         # Stash workflow file path for resume
         if wf_def.file_path:
             run.env["__workflow_file__"] = wf_def.file_path
@@ -192,6 +195,8 @@ class ReviewEngine:
             trigger_payload=inputs or {},
             env=dict(wf_def.env) if wf_def.env else {},
         )
+        # Runtime identity env var referenced by workflow YAML (${{ env.RUN_ID }})
+        run.env["RUN_ID"] = run.id
         if wf_def.file_path:
             run.env["__workflow_file__"] = wf_def.file_path
         run.env["__workflow_name__"] = wf_def.name
@@ -202,14 +207,29 @@ class ReviewEngine:
         ))
         return run
 
-    def execute_existing_run(self, run_id: str) -> WorkflowRun:
-        """Load a run from storage and execute it. Used by background tasks."""
+    def execute_existing_run(self, run_id: str,
+                             secret_env: Optional[Dict[str, str]] = None) -> WorkflowRun:
+        """Load a run from storage and execute it. Used by background tasks.
+
+        `secret_env` (e.g. user-supplied API keys) is merged into run.env for the
+        duration of execution only — stripped before the run state is persisted.
+        """
         run = self.storage.get_run(run_id)
         if run is None:
             raise ValueError(f"run not found: {run_id}")
-        if run.workflow_def is None and run.env.get("__workflow_file__"):
-            run.workflow_def = self.parser.parse_file(run.env["__workflow_file__"])
-        return self._do_execute(run)
+        if run.workflow_def is None:
+            wf_file = run.env.get("__workflow_file__")
+            if wf_file:
+                run.workflow_def = self.parser.parse_file(wf_file)
+            else:
+                # Dynamically registered workflow (no file on disk): recover
+                # the definition from the in-memory registry by stored name.
+                run.workflow_def = self._workflow_defs.get(run.env.get("__workflow_name__"))
+            if run.workflow_def is None:
+                raise ValueError(f"workflow definition not found for run {run_id}")
+        if secret_env:
+            run.env.update(secret_env)
+        return self._do_execute(run, secret_keys=set(secret_env or {}))
 
     # -- Internal --
 
@@ -219,14 +239,18 @@ class ReviewEngine:
         Allows cancel_run to find the coordinator during execution."""
         self._coordinators[run_id] = coordinator
 
-    def _do_execute(self, run: WorkflowRun) -> WorkflowRun:
+    def _do_execute(self, run: WorkflowRun,
+                    secret_keys: Optional[set] = None) -> WorkflowRun:
         self._active_runs[run.id] = run
         try:
             coordinator = self._workflow_executor.execute(run)
             self._coordinators[run.id] = coordinator
-            self.storage.save_run(run)
         finally:
             self._active_runs.pop(run.id, None)
+            # Per-run credentials live only in memory — never persist them.
+            for key in (secret_keys or ()):
+                run.env.pop(key, None)
+            self.storage.save_run(run)
         return run
 
     def _register_persist_hooks(self) -> None:

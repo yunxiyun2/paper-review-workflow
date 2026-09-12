@@ -20,6 +20,18 @@ _jinja_env = Environment(
     autoescape=select_autoescape(disabled_extensions=("j2",), default=False),
 )
 
+DIM_LABELS_ZH = {
+    "soundness": "严谨性",
+    "presentation": "表达清晰度",
+    "contribution": "贡献性",
+    "excitement": "创新兴奋度",
+    "reproducibility": "可复现性",
+    "overall": "总体评价",
+    "significance": "重要性",
+    "originality": "原创性",
+    "clarity": "清晰性",
+}
+
 
 class DimensionAction(BaseAction):
     """Score one dimension of a paper. Driven by `with.dimension` + `env.VENUE` params."""
@@ -72,7 +84,7 @@ class DimensionAction(BaseAction):
             return ActionResult(success=False, message=f"prompt render failed: {e}")
 
         # Call LLM with venue's schema
-        client = LLMClient.from_env()
+        client = LLMClient.from_env(env)
         response = client.complete(
             system=prompt,
             messages=[{"role": "user", "content": f"Score the {dimension} dimension of this paper."}],
@@ -90,6 +102,17 @@ class DimensionAction(BaseAction):
 
         if log_callback:
             log_callback(f"[{venue_name}/{dimension}] score={score.score} conf={score.confidence:.2f}")
+            # Stream the model's actual review so users see it in real time
+            label = DIM_LABELS_ZH.get(dimension, dimension)
+            justification = (score.justification or "").strip()
+            if justification:
+                for para in justification.split("\n"):
+                    if para.strip():
+                        log_callback(f"💬 [{label}] {para.strip()}")
+            if score.strengths:
+                log_callback(f"✅ [{label}] 优点: " + "；".join(score.strengths))
+            if score.weaknesses:
+                log_callback(f"⚠️ [{label}] 不足: " + "；".join(score.weaknesses))
 
         return ActionResult(
             success=True,
