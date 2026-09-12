@@ -1,5 +1,6 @@
 """LLMClient: convenience layer delegating to a provider chosen by env."""
 import os
+import time
 from typing import Dict, Optional, Type, Union
 from pydantic import BaseModel
 
@@ -58,16 +59,36 @@ class LLMClient:
         cls._instance = None
 
     def complete(self, system, messages, response_schema=None, cached_context=None,
-                 model=None, max_tokens=None, temperature=None) -> LLMResponse:
-        return self._provider.complete(
+                 model=None, max_tokens=None, temperature=None, log_callback=None) -> LLMResponse:
+        used_model = model or self.model
+        used_max_tokens = max_tokens or self.max_tokens
+        used_temp = temperature if temperature is not None else self.temperature
+        schema_name = response_schema.__name__ if response_schema else "-"
+
+        if log_callback:
+            log_callback(
+                f"🤖 LLM 调用 → provider={self._provider.provider_name}, model={used_model}, "
+                f"temperature={used_temp}, max_tokens={used_max_tokens}, schema={schema_name}"
+            )
+        t0 = time.monotonic()
+        resp = self._provider.complete(
             system=system,
             messages=messages,
-            model=model or self.model,
-            max_tokens=max_tokens or self.max_tokens,
-            temperature=temperature if temperature is not None else self.temperature,
+            model=used_model,
+            max_tokens=used_max_tokens,
+            temperature=used_temp,
             response_schema=response_schema,
             cached_context=cached_context,
         )
+        elapsed = time.monotonic() - t0
+        if log_callback:
+            usage = resp.usage or {}
+            log_callback(
+                f"📥 LLM 返回 ← 输入 {usage.get('input_tokens', '?')} tokens / "
+                f"输出 {usage.get('output_tokens', '?')} tokens, 耗时 {elapsed:.1f}s, "
+                f"模型 {resp.model}"
+            )
+        return resp
 
     def score(self, system: str, user_content: str, schema: Type[BaseModel],
               cached_context: Optional[str] = None) -> BaseModel:

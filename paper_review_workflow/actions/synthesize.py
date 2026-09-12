@@ -81,8 +81,18 @@ class SynthesizeAction(BaseAction):
             system=prompt,
             messages=[{"role": "user", "content": dim_summary}],
             response_schema=SynthesisResult,
+            log_callback=log_callback,
         )
         synthesis = response.structured
+        usage = response.usage or {}
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        llm_usage = {
+            "model": response.model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
 
         out_dir = session_dir / "50_synthesize"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +124,7 @@ class SynthesizeAction(BaseAction):
             outputs={
                 "review_path": str(out_dir / "review.md"),
                 "scores_path": str(out_dir / "scores.json"),
+                "llm_usage": llm_usage,
             },
         )
 

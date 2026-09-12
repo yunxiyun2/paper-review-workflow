@@ -71,11 +71,16 @@
     .form-row { margin-bottom: 10px; }
     .log-box {
       background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-      padding: 10px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6;
+      padding: 10px; max-height: 420px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.7;
     }
-    .log-line { color: var(--text2); }
+    .log-line { color: var(--text2); white-space: pre-wrap; word-break: break-all; }
     .log-line .ts { color: var(--text3); }
-    .log-line .ev { color: var(--accent); }
+    .log-line.wf { color: var(--text); font-weight: 600; border-top: 1px dashed var(--border); padding-top: 4px; }
+    .log-line.job { color: var(--accent); }
+    .log-line.step { color: var(--text2); padding-left: 18px; }
+    .log-line.llm { color: var(--text); }
+    .log-line.ok { color: var(--success); }
+    .log-line.err { color: var(--failure); }
     .run-list { display: flex; flex-direction: column; gap: 4px; }
     .run-item {
       padding: 8px 12px; border-radius: var(--radius); cursor: pointer;
@@ -371,19 +376,52 @@
                        j.status === 'failure' ? '❌' : j.status === 'cancelled' ? '🚫' : '⏳';
           return '<div>' + icon + ' ' + jid + ' <span class="badge ' + j.status + '">' + j.status + '</span></div>';
         }).join('');
+        // Aggregate token usage across all steps' llm_usage outputs
+        let totalIn = 0, totalOut = 0, calls = 0;
+        const perJob = [];
+        Object.entries(run.jobs || {}).forEach(([jid, j]) => {
+          let jIn = 0, jOut = 0, jCalls = 0;
+          (j.steps || []).forEach(s => {
+            const u = s.outputs && s.outputs.llm_usage;
+            if (u) {
+              jIn += u.input_tokens || 0; jOut += u.output_tokens || 0; jCalls += 1;
+            }
+          });
+          if (jCalls > 0) {
+            totalIn += jIn; totalOut += jOut; calls += jCalls;
+            perJob.push('<div class="score-bar" style="margin-bottom:2px;"><span class="label">' + jid +
+              '</span><span style="font-size:12px;color:var(--text2);">输入 ' + jIn.toLocaleString() +
+              ' · 输出 ' + jOut.toLocaleString() + ' tokens</span></div>');
+          }
+        });
+        const usageHtml = calls > 0
+          ? '<p style="margin-top:4px;"><strong>📊 Token 用量:</strong> 输入 ' + totalIn.toLocaleString() +
+            ' · 输出 ' + totalOut.toLocaleString() + ' · 总计 ' + (totalIn + totalOut).toLocaleString() +
+            ' tokens（' + calls + ' 次模型调用）</p>' + perJob.join('')
+          : '<p style="margin-top:4px;font-size:12px;color:var(--text3);">📊 Token 用量: 无模型调用记录</p>';
         document.getElementById('mon-detail').innerHTML =
-          '<p><strong>任务:</strong> ' + (run.task_name || '(未命名)') + '</p>' +
           '<p><strong>run_id:</strong> ' + run.run_id + '</p>' +
           '<p><strong>status:</strong> <span class="badge ' + run.status + '">' + run.status + '</span></p>' +
           '<p><strong>duration:</strong> ' + (run.duration ? run.duration.toFixed(1) + 's' : '-') + '</p>' +
           '<div style="margin-top:10px;"><strong>Jobs:</strong></div>' +
           '<div style="margin-top:6px;">' + (jobs || '<p class="empty-state">无</p>') + '</div>' +
+          '<div style="margin-top:10px;"><strong>Token 用量统计</strong></div>' + usageHtml +
           '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">' +
           '<button class="btn btn-danger" onclick="cancelRun(\'' + run.run_id + '\')">取消</button>' +
           '<button class="btn" onclick="resumeRun(\'' + run.run_id + '\')">续跑</button>' +
           '<button class="btn" onclick="deleteRunKey(\'' + run.run_id + '\')">删除 API-Key</button>' +
           '<button class="btn btn-danger" onclick="deleteRun(\'' + run.run_id + '\')">删除任务</button>' +
           '</div>';
+        // Replay historical step logs (incl. LLM call parameter/usage lines)
+        const logBox = document.getElementById('mon-log');
+        Object.values(run.jobs || {}).forEach(j => {
+          (j.steps || []).forEach(s => {
+            (s.log || []).forEach(line => {
+              logBox.innerHTML += logHtml('llm', '', line);
+            });
+          });
+        });
+        logBox.scrollTop = logBox.scrollHeight;
       } catch(e) { console.error('loadRunDetail failed:', e); }
     }
 
@@ -404,17 +442,80 @@
       state.ws = ws;
     }
 
+    function fmtDur(d) {
+      return (d !== null && d !== undefined) ? Number(d).toFixed(1) + 's' : '';
+    }
+    function logHtml(cls, ts, body) {
+      const t = ts ? '<span class="ts">[' + ts + ']</span> ' : '';
+      return '<div class="log-line ' + cls + '">' + t + body + '</div>';
+    }
+
+    // Structured log rendering: one visual language per event layer
+    // (workflow → job → step → LLM calls / review content).
+    function renderLogEvent(event) {
+      const ev = event.event || '';
+      if (ev === 'heartbeat' || ev === 'pong') return '';
+      const d = event.data || {};
+      const ts = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '';
+      switch (ev) {
+        case 'workflow.started': {
+          const bits = [d.venue ? 'venue=' + d.venue : '', d.model ? 'model=' + d.model : '',
+                        d.task_name ? '「' + d.task_name + '」' : ''].filter(Boolean).join(' · ');
+          return logHtml('wf', ts, '🚀 工作流开始: ' + (d.workflow_name || '') + (bits ? ' — ' + bits : ''));
+        }
+        case 'workflow.completed': {
+          const ok = d.status === 'success';
+          return logHtml('wf ' + (ok ? 'ok' : 'err'), ts,
+            (ok ? '🏁 工作流完成: ' : '❌ 工作流结束: ') + (d.status || '') +
+            (d.duration != null ? '（总耗时 ' + fmtDur(d.duration) + '）' : ''));
+        }
+        case 'workflow.cancelled':
+          return logHtml('wf err', ts, '🛑 工作流已取消');
+        case 'job.started':
+          return logHtml('job', ts, '⚙️ Job 开始: ' + (event.job_id || '') + (d.name ? ' — ' + d.name : ''));
+        case 'job.completed': {
+          const ok = d.status === 'success';
+          return logHtml('job ' + (ok ? 'ok' : 'err'), ts,
+            (ok ? '✅' : '❌') + ' Job ' + (ok ? '完成' : '结束') + ': ' + (event.job_id || '') +
+            ' (' + (d.status || '') + (d.duration != null ? ', ' + fmtDur(d.duration) : '') + ')');
+        }
+        case 'job.skipped':
+          return logHtml('job', ts, '⏭️ Job 跳过: ' + (event.job_id || ''));
+        case 'step.started':
+          return logHtml('step', ts, '▶️ Step 开始: ' + (d.name || event.step_id || ''));
+        case 'step.completed': {
+          const ok = d.status === 'success';
+          let body = (ok ? '✔️' : '✖️') + ' Step ' + (ok ? '完成' : '失败') + ': ' + (d.status || '') +
+            (d.duration != null ? ', ' + fmtDur(d.duration) : '');
+          if (d.error) body += ' — ' + String(d.error).slice(0, 200);
+          let html = logHtml('step ' + (ok ? 'ok' : 'err'), ts, body);
+          if (ok && d.outputs && Object.keys(d.outputs).length) {
+            const parts = Object.entries(d.outputs)
+              .filter(([k, v]) => k !== 'llm_usage' && typeof v !== 'object')
+              .slice(0, 4)
+              .map(([k, v]) => k + '=' + String(v).slice(0, 70));
+            if (parts.length) html += logHtml('step llm', ts, '↳ ' + parts.join(' · '));
+          }
+          return html;
+        }
+        case 'step.skipped':
+          return logHtml('step', ts, '⏭️ Step 跳过');
+        case 'step.log':
+          return logHtml('llm', ts, d.line || '');
+        default:
+          return logHtml('', ts, ev);
+      }
+    }
+
     function handleWsEvent(event) {
       const ev = event.event || '';
       if (ev === 'heartbeat' || ev === 'pong') return;
       // Global socket sees all runs — only show events of the selected run
       if (state.activeRunId && event.run_id && event.run_id !== state.activeRunId) return;
+      const html = renderLogEvent(event);
+      if (!html) return;
       const logBox = document.getElementById('mon-log');
-      const ts = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '';
-      const jid = event.job_id || '';
-      const sid = event.step_id || '';
-      const line = '<div class="log-line"><span class="ts">[' + ts + ']</span> <span class="ev">' + ev + '</span> ' + jid + ' ' + sid + '</div>';
-      logBox.innerHTML += line;
+      logBox.innerHTML += html;
       logBox.scrollTop = logBox.scrollHeight;
       if (ev.indexOf('job.') === 0 || ev.indexOf('workflow.') === 0) {
         loadRunDetail(state.activeRunId);
@@ -459,7 +560,8 @@
         const data = await apiGet('/api/runs?status=success');
         const sel = document.getElementById('dec-run');
         sel.innerHTML = '<option value="">-- 选择 run --</option>' +
-          data.runs.map(r => '<option value="' + r.run_id + '">' + r.run_id.substring(0, 24) + '... (' + (r.duration ? r.duration.toFixed(1) + 's' : '?') + ')</option>').join('');
+          data.runs.map(r => '<option value="' + r.run_id + '">' +
+            (r.task_name || '未命名评审') + ' (' + r.run_id.substring(0, 8) + ')</option>').join('');
       } catch(e) { console.error('loadCompletedRuns failed:', e); }
     }
 

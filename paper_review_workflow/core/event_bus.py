@@ -56,10 +56,15 @@ class WorkflowEvent:
 
 
 def make_workflow_started_event(run) -> WorkflowEvent:
+    env = run.env or {}
     return WorkflowEvent(
         event_type=EventType.WORKFLOW_STARTED, run_id=run.id,
         data={"workflow_name": run.workflow_def.name if run.workflow_def else "",
-              "trigger_type": run.trigger_type, "status": run.status.value},
+              "trigger_type": run.trigger_type, "status": run.status.value,
+              "task_name": (run.trigger_payload or {}).get("task_name", ""),
+              "venue": env.get("VENUE", ""),
+              "provider": env.get("LLM_PROVIDER", ""),
+              "model": env.get("LLM_MODEL", "")},
     )
 
 
@@ -94,7 +99,8 @@ def make_step_started_event(run_id, job_id, step) -> WorkflowEvent:
 def make_step_completed_event(run_id, job_id, step) -> WorkflowEvent:
     return WorkflowEvent(
         event_type=EventType.STEP_COMPLETED, run_id=run_id, job_id=job_id, step_id=step.step_def.id if step.step_def else None,
-        data={"status": step.status.value, "duration": step.duration, "outputs": step.outputs},
+        data={"status": step.status.value, "duration": step.duration, "outputs": step.outputs,
+              "error": step.error_msg},
     )
 
 

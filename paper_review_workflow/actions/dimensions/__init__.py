@@ -90,8 +90,10 @@ class DimensionAction(BaseAction):
             messages=[{"role": "user", "content": f"Score the {dimension} dimension of this paper."}],
             response_schema=schema,
             cached_context=paper_text,
+            log_callback=log_callback,
         )
         score = response.structured
+        llm_usage = self._llm_usage(response)
 
         # Write score.json (with venue field) + review.md
         out_dir = session_dir / f"10_dim_{dimension}"
@@ -121,9 +123,24 @@ class DimensionAction(BaseAction):
                 "confidence": score.confidence,
                 "score_path": str(out_dir / "score.json"),
                 "review_path": str(out_dir / "review.md"),
+                "llm_usage": llm_usage,
             },
             log_lines=[f"[{venue_name}/{dimension}] score={score.score}"],
         )
+
+    @staticmethod
+    def _llm_usage(response) -> dict:
+        """Normalize the provider usage (GLM/OpenAI: prompt/completion_tokens;
+        anthropic: input/output_tokens) into a flat token-usage record."""
+        usage = getattr(response, "usage", None) or {}
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        return {
+            "model": getattr(response, "model", ""),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
 
     def _render_prompt(self, prompts_dir: str, dimension: str, metadata: dict) -> str:
         """Render venue-specific prompt template."""

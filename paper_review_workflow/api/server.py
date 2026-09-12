@@ -457,7 +457,8 @@ def create_app(
                     "duration": j.duration,
                     "steps": [
                         {"id": s.id, "name": s.step_def.name if s.step_def else "",
-                         "status": s.status.value, "outputs": s.outputs}
+                         "status": s.status.value, "outputs": s.outputs,
+                         "error": s.error_msg, "log": s.log}
                         for s in j.steps
                     ],
                 }
