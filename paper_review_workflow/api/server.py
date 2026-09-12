@@ -585,7 +585,7 @@ def _build_review_workflow_yaml(venue: str) -> str:
         "    strategy:\n"
         "      matrix:\n"
         f"        dimension: [{matrix}]\n"
-        f"      max-parallel: {len(dims)}\n"
+        f"      max-parallel: 2\n"
         "    runs-on: local\n"
         "    steps:\n"
         "      - uses: paper-review/dim_score@v1\n"

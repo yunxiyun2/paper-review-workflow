@@ -42,7 +42,7 @@ jobs:
     strategy:
       matrix:
         dimension: [soundness, presentation, contribution]
-      max-parallel: 3
+      max-parallel: 2
     runs-on: local
     steps:
       - uses: paper-review/dim_score@v1

@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 class DeepSeekProvider(LLMProvider):
     provider_name = "deepseek"
     BASE_URL = "https://api.deepseek.com"
-    MAX_RETRIES = 3
-    INITIAL_BACKOFF = 1.0
-    MAX_BACKOFF = 30.0
+    MAX_RETRIES = 5
+    INITIAL_BACKOFF = 3.0
+    MAX_BACKOFF = 60.0
 
     def __init__(self, api_key: Optional[str] = None):
         from openai import OpenAI

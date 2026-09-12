@@ -1,224 +1,126 @@
-# Paper Review Workflow
+# Paper Review Workflow · 论文评审工作台
 
-AI-powered academic paper review workflow engine. Runs a venue-specific LLM-based peer review (NeurIPS 3-dimension, ICML/ACL 4-dimension) on a PDF or arXiv paper, producing structured scores and a final recommendation.
+[English](./README_EN.md) | 简体中文
 
-## Installation
+基于大模型的学术论文评审工作流引擎。上传一篇 PDF，选择目标会议（NeurIPS / ICML / ACL）与维度权重，由多维度 LLM 评审流水线产出结构化评分、综合评审意见与最终投稿建议。
+
+## 功能特性
+
+- **多会议评审**：NeurIPS（3 维度，1-10 分）、ICML（4 维度，1-4 分）、ACL（4 维度，1-4 分），各会议独立的维度、权重、分数区间与推荐阈值
+- **多厂商大模型**：智谱 GLM、OpenAI、DeepSeek、Anthropic Claude，按次提供 API Key 即可，也支持环境变量配置
+- **临时评审模式**：PDF + Key 仅在内存中使用，Key 可随时手动删除，任务可整体删除，不做持久化
+- **实时结构化日志**：终端风格，展示模型调用参数、Token 用量、思考过程、各阶段状态流转
+- **断点续跑**：任务失败后可从断点恢复，已成功的阶段不重复消耗 Token
+- **OpenReview 导出**：评审结果一键导出为 OpenReview XML
+- **双主题界面**：纸感学术评审台（浅色）/ 深空精密工作台（暗色），右下角一键切换
+
+## 快速开始
 
 ```bash
 git clone <repo>
 cd paper-review-workflow
-pip install -e ".[dev]"
-```
-
-Set your Anthropic API key:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-## Quick Start
-
-Review a local PDF (the import path is PDF-only; arXiv/URL import has been removed):
-
-```bash
-python main.py run configs/neurips_review.yaml \
-    --payload '{"paper_source": "/path/to/paper.pdf"}'
-```
-
-## API Server Mode
-
-Start the FastAPI HTTP API + WebSocket server:
-
-```bash
-# Default (no subcommand starts server)
-python main.py
-
-# Explicit
-python main.py server --host 0.0.0.0 --port 8000
-
-# Dev mode with auto-reload
-python main.py server --reload
-```
-
-API docs at `http://localhost:8000/docs`. Key endpoints:
-
-- `GET /api/health` — health check
-- `GET /api/workflows` — list registered workflows
-- `POST /api/workflows/register` — register a YAML workflow
-- `POST /api/runs` — dispatch a review (returns run_id immediately)
-- `GET /api/runs/{run_id}` — get run status
-- `POST /api/runs/{run_id}/cancel` — cancel a run
-- `POST /api/runs/{run_id}/resume` — resume a failed/interrupted run
-
-WebSocket endpoints:
-- `ws://localhost:8000/ws` — all events
-- `ws://localhost:8000/ws/runs/{run_id}` — filtered to single run
-
-Example: dispatch a review via curl:
-
-```bash
-curl -X POST http://localhost:8000/api/runs \
-  -H "Content-Type: application/json" \
-  -d '{"workflow_name": "neurips-paper-review", "inputs": {"paper_source": "2402.12098"}}'
-```
-
-## Web UI
-
-The FastAPI server includes a built-in web frontend. Start the server:
-
-```bash
+pip install -e .
 python main.py server
 ```
 
-Then open `http://localhost:8000/` in your browser. The frontend provides 4 tabs:
+浏览器打开 <http://localhost:8000/>，「发起评审」填写任务名称、选择会议与权重、上传 PDF、选择模型厂商与模型、粘贴 API Key，点击开始评审。
 
-1. **装配 (Assemble)**: Select venue, adjust dimension weights, generate + download YAML, register & dispatch
-2. **发起评审 (Review)**: Name the task, select a venue (with adjustable dimension weights), upload a PDF, pick a model, paste your API key (per-request, held in memory only), execute. The task name shows up in the monitor list.
-3. **监控 (Monitor)**: List all runs, click to view real-time progress via WebSocket, cancel/resume
-4. **决策 (Decision)**: Select a completed run, view recommendation + per-dimension scores + rationale
+### 环境变量方式配置模型（可选）
 
-The frontend is a single-file pure HTML/JS/CSS app (`paper_review_workflow/api/static/index.html`) — zero build step, zero npm dependencies.
+不通过界面的任务也可以用环境变量指定模型：
 
-## Output Structure
+```bash
+export LLM_PROVIDER=zhipu          # zhipu / openai / deepseek / anthropic
+export ZHIPU_API_KEY=...           # 各厂商对应的环境变量
+# LLM_MODEL 缺省值：zhipu→glm-4.6，anthropic→claude-sonnet-4-6，其余需显式指定
+```
 
-Each run creates a session directory:
+## Web 界面
+
+| 页面 | 功能 |
+| --- | --- |
+| 发起评审 | 任务名称、会议与维度权重、PDF 上传、厂商与模型、API Key |
+| 监控 | Run 列表（按任务名展示）、Run 详情、Token 用量统计、实时日志、取消 / 续跑 / 删除 API-Key / 删除任务 |
+| 决策 | 推荐结论、各维度分数、关键评估、决策依据、综合评审（可复制） |
+
+主题切换：右下角日 / 月图标，选择持久化保存。
+
+## CLI
+
+```bash
+python main.py server                                   # 启动 API + Web 服务
+python main.py run configs/neurips_review.yaml \
+    --payload '{"paper_source": "/path/to/paper.pdf"}'  # 运行评审
+python main.py list-runs                                # 历史任务
+python main.py show-run <run_id>                        # 任务详情
+python main.py resume <run_id>                          # 从断点恢复
+python main.py export <run_id> --format xml             # 导出 OpenReview XML
+```
+
+## HTTP API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/review` | 临时评审：multipart 上传 PDF + api_key + model + venue + weights + task_name |
+| GET | `/api/runs` | 任务列表（支持 status 过滤） |
+| GET | `/api/runs/{id}` | 任务详情（含步骤日志、Token 用量） |
+| POST | `/api/runs/{id}/cancel` | 取消 |
+| POST | `/api/runs/{id}/resume` | 续跑（可携带 api_key） |
+| POST | `/api/runs/{id}/delete-key` | 删除内存中的 API Key |
+| DELETE | `/api/runs/{id}` | 删除任务（Key、会话目录、运行记录一并清除） |
+| GET | `/api/runs/{id}/decision` | 决策数据 |
+| GET | `/api/runs/{id}/review` | 综合评审 Markdown |
+| GET | `/api/runs/{id}/export` | OpenReview XML |
+| GET | `/api/venues` | 会议配置 |
+| WS | `/ws` | 全量实时事件 |
+
+交互式文档：<http://localhost:8000/docs>
+
+## 架构
+
+复用 lwf 工作流引擎骨架（GitHub Actions 风格 YAML、三层状态机、矩阵并行），评审相关动作为：
+
+- `extract`：PDF 解析（仅支持本地 PDF），产出元数据与全文
+- `dim_score`：按会议维度矩阵并行打分（max-parallel: 2），结构化输出含证据引用
+- `synthesize`：跨维度综合评审
+- `decide`：纯规则加权评分，映射 OpenReview 七档推荐
+
+运行目录结构：
 
 ```
 sessions/<run_id>/
-  run.json                    # Full run state (lwf storage, under sessions/runs/)
-  00_extract/                 # Parsed paper
-    metadata.json
-    full_text.md
-  10_dim_soundness/            # 3 dimension scores (parallel)
-    score.json
-    review.md
-  ...
-  50_synthesize/              # Meta-review
-    review.md
-    scores.json
-  60_decision/                # Final recommendation
-    decision.json
+  upload/paper.pdf          # 上传的原始 PDF
+  00_extract/               # 元数据、全文
+  10_dim_<dimension>/       # 各维度 score.json + review.md
+  50_synthesize/            # 综合评审
+  60_decision/decision.json # 最终决策
   final_report.md
+sessions/runs/<run_id>.json # 运行状态（JSON 文件存储，无数据库）
 ```
 
-## Resume / Rerun
+## 模型厂商支持
 
-If a run fails or is interrupted:
+| 厂商 | 环境变量 | 默认模型 | 结构化输出 |
+| --- | --- | --- | --- |
+| 智谱 GLM | `ZHIPU_API_KEY` | glm-4.6 | json_object + schema 注入 |
+| OpenAI | `OPENAI_API_KEY` | 需指定 `LLM_MODEL` | json_schema |
+| DeepSeek | `DEEPSEEK_API_KEY` | 需指定 `LLM_MODEL` | json_object + schema 注入 |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-6 | tool use |
+
+所有 provider 共享：3-5 次指数退避重试、schema 校验失败自动回传错误自愈重试、限流（429）长退避。
+
+## 隐私与数据安全
+
+- API Key 只保存在服务进程内存中，永不落盘（存储层对 `*_API_KEY` 字段脱敏兜底）
+- 「删除 API-Key」立即清除内存中的 Key；「删除任务」连同 PDF、评审产物、运行记录一并删除
+- 上传的 PDF 与评审产物默认保留，需要时手动删除或整任务删除
+
+## 测试
 
 ```bash
-python main.py resume <run_id>
+pytest                    # 单元 + 集成（无需 API Key）
+pytest --run-e2e -m e2e   # 端到端（需要真实 Key）
 ```
-
-Force rerun a specific component (cascades to downstream):
-
-```bash
-python main.py resume <run_id> --rerun dimensions_soundness
-```
-
-## List Past Runs
-
-```bash
-python main.py list-runs
-python main.py show-run <run_id>
-```
-
-## Venue-Specific Mode
-
-The engine supports three venue configurations, selected via the `VENUE` env var (default `neurips`). Each venue defines its own dimensions, score range, weights, and recommendation thresholds; venue configs live in `configs/venues/<name>.yaml`.
-
-| Venue | Dimensions | Score range |
-| --- | --- | --- |
-| **NeurIPS** (default) | Soundness / Presentation / Contribution (3) | 1-10 |
-| **ICML** | Soundness / Significance / Originality / Clarity (4) | 1-4 |
-| **ACL** | Soundness / Excitement / Reproducibility / Overall (4) | 1-4 |
-
-`DimensionAction` builds a dynamic Pydantic schema per venue (e.g. `DimensionScore_neurips` enforces 1-10, `DimensionScore_icml` enforces 1-4). `DecideAction` reads the venue's weights and thresholds to compute the weighted average and map it to an OpenReview-style 7-tier recommendation (`strong_accept` ... `strong_reject`).
-
-To dispatch a review under a specific venue, set `VENUE` in the workflow `env` block (or pass it via the API). The example `configs/neurips_review.yaml` defaults to `neurips`; override with `VENUE: icml` or `VENUE: acl` to switch venues.
-
-## Configuration
-
-See `configs/neurips_review.yaml` for the default NeurIPS 3-dimension review config. Venue configs (dimensions, score ranges, weights, thresholds) are in `configs/venues/`.
-
-## Multi-Provider LLM Support
-
-The engine supports 3 LLM providers:
-
-| Provider | Env Var | Default Model | Structured Output |
-|----------|---------|---------------|-------------------|
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` | tool use (strict) |
-| OpenAI | `OPENAI_API_KEY` | (user must set `LLM_MODEL`) | json_schema (strict) |
-| DeepSeek | `DEEPSEEK_API_KEY` | (user must set `LLM_MODEL`) | json_object + prompt schema |
-| Zhipu (智谱) | `ZHIPU_API_KEY` | `glm-4.6` | json_object + prompt schema |
-
-Switch providers via environment variables:
-
-```bash
-# OpenAI
-export LLM_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
-export LLM_MODEL=gpt-4o  # user specifies current model name
-
-# DeepSeek
-export LLM_PROVIDER=deepseek
-export DEEPSEEK_API_KEY=sk-...
-export LLM_MODEL=deepseek-chat
-
-# Zhipu (智谱)
-export LLM_PROVIDER=zhipu
-export ZHIPU_API_KEY=...
-# LLM_MODEL defaults to glm-4.6
-
-# Anthropic (default)
-export LLM_PROVIDER=anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-# LLM_MODEL defaults to claude-sonnet-4-6
-```
-
-API keys can also be supplied **per request** (no env var needed) via the upload
-flow: `POST /api/review` accepts a PDF + `task_name` + `api_key` + `model` + `venue`
-as multipart form fields. The key is held in memory only (masked in any persisted
-state) until explicitly deleted via `POST /api/runs/{run_id}/delete-key`, or
-`DELETE /api/runs/{run_id}` removes the key, the session directory (PDF, artifacts,
-reports) and the run record entirely.
-
-All providers share the same retry strategy (3x exponential backoff) and schema validation (`SchemaValidationError` on invalid LLM output).
-
-## Export
-
-Export review results as OpenReview XML:
-
-```bash
-# CLI
-python main.py export <run_id> --format xml
-python main.py export <run_id> --output report.xml
-
-# API
-curl http://localhost:8000/api/runs/<run_id>/export?format=xml > report.xml
-```
-
-The XML follows the standard OpenReview note format with 5 fields: recommendation, confidence, review, soundness, contribution.
-
-## Testing
-
-```bash
-# Unit + integration (no API key needed)
-pytest
-
-# E2E (requires API key, costs ~$0.5)
-pytest --run-e2e -m e2e
-```
-
-## Architecture
-
-This project reuses the lwf workflow engine skeleton (GitHub Actions-style YAML, three-layer state machine, matrix parallelism) and adds paper-review-specific actions:
-
-- `extract`: PDF / arXiv parsing
-- `dim_score` (matrix × 3 NeurIPS / × 4 ICML/ACL): LLM scoring per dimension
-- `synthesize`: LLM meta-review
-- `decide`: pure-rule weighted scoring
-
-See `docs/superpowers/specs/2026-08-12-paper-review-workflow-design.md` for the full design.
 
 ## License
 
