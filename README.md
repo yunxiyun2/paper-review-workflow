@@ -23,7 +23,7 @@ pip install -e .
 python main.py server
 ```
 
-浏览器打开 <http://localhost:8000/>，「发起评审」填写任务名称、选择会议与权重、上传 PDF、选择模型厂商与模型、粘贴 API Key，点击开始评审。
+浏览器打开 [http://localhost:8000/](http://localhost:8000/)，「发起评审」填写任务名称、选择会议与权重、上传 PDF、选择模型厂商与模型、粘贴 API Key，点击开始评审。
 
 ### 环境变量方式配置模型（可选）
 
@@ -32,16 +32,15 @@ python main.py server
 ```bash
 export LLM_PROVIDER=zhipu          # zhipu / openai / deepseek / anthropic
 export ZHIPU_API_KEY=...           # 各厂商对应的环境变量
-# LLM_MODEL 缺省值：zhipu→glm-4.6，anthropic→claude-sonnet-4-6，其余需显式指定
 ```
 
 ## Web 界面
 
-| 页面 | 功能 |
-| --- | --- |
-| 发起评审 | 任务名称、会议与维度权重、PDF 上传、厂商与模型、API Key |
-| 监控 | Run 列表（按任务名展示）、Run 详情、Token 用量统计、实时日志、取消 / 续跑 / 删除 API-Key / 删除任务 |
-| 决策 | 推荐结论、各维度分数、关键评估、决策依据、综合评审（可复制） |
+| 页面     | 功能                                                                                                |
+| -------- | --------------------------------------------------------------------------------------------------- |
+| 发起评审 | 任务名称、会议与维度权重、PDF 上传、厂商与模型、API Key                                             |
+| 监控     | Run 列表（按任务名展示）、Run 详情、Token 用量统计、实时日志、取消 / 续跑 / 删除 API-Key / 删除任务 |
+| 决策     | 推荐结论、各维度分数、关键评估、决策依据、综合评审（可复制）                                        |
 
 主题切换：右下角日 / 月图标，选择持久化保存。
 
@@ -59,22 +58,22 @@ python main.py export <run_id> --format xml             # 导出 OpenReview XML
 
 ## HTTP API
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| POST | `/api/review` | 临时评审：multipart 上传 PDF + api_key + model + venue + weights + task_name |
-| GET | `/api/runs` | 任务列表（支持 status 过滤） |
-| GET | `/api/runs/{id}` | 任务详情（含步骤日志、Token 用量） |
-| POST | `/api/runs/{id}/cancel` | 取消 |
-| POST | `/api/runs/{id}/resume` | 续跑（可携带 api_key） |
-| POST | `/api/runs/{id}/delete-key` | 删除内存中的 API Key |
-| DELETE | `/api/runs/{id}` | 删除任务（Key、会话目录、运行记录一并清除） |
-| GET | `/api/runs/{id}/decision` | 决策数据 |
-| GET | `/api/runs/{id}/review` | 综合评审 Markdown |
-| GET | `/api/runs/{id}/export` | OpenReview XML |
-| GET | `/api/venues` | 会议配置 |
-| WS | `/ws` | 全量实时事件 |
+| 方法   | 路径                          | 说明                                                                         |
+| ------ | ----------------------------- | ---------------------------------------------------------------------------- |
+| POST   | `/api/review`               | 临时评审：multipart 上传 PDF + api_key + model + venue + weights + task_name |
+| GET    | `/api/runs`                 | 任务列表（支持 status 过滤）                                                 |
+| GET    | `/api/runs/{id}`            | 任务详情（含步骤日志、Token 用量）                                           |
+| POST   | `/api/runs/{id}/cancel`     | 取消                                                                         |
+| POST   | `/api/runs/{id}/resume`     | 续跑（可携带 api_key）                                                       |
+| POST   | `/api/runs/{id}/delete-key` | 删除内存中的 API Key                                                         |
+| DELETE | `/api/runs/{id}`            | 删除任务（Key、会话目录、运行记录一并清除）                                  |
+| GET    | `/api/runs/{id}/decision`   | 决策数据                                                                     |
+| GET    | `/api/runs/{id}/review`     | 综合评审 Markdown                                                            |
+| GET    | `/api/runs/{id}/export`     | OpenReview XML                                                               |
+| GET    | `/api/venues`               | 会议配置                                                                     |
+| WS     | `/ws`                       | 全量实时事件                                                                 |
 
-交互式文档：<http://localhost:8000/docs>
+交互式文档：[http://localhost:8000/docs](http://localhost:8000/docs)
 
 ## 架构
 
@@ -100,12 +99,12 @@ sessions/runs/<run_id>.json # 运行状态（JSON 文件存储，无数据库）
 
 ## 模型厂商支持
 
-| 厂商 | 环境变量 | 默认模型 | 结构化输出 |
-| --- | --- | --- | --- |
-| 智谱 GLM | `ZHIPU_API_KEY` | glm-4.6 | json_object + schema 注入 |
-| OpenAI | `OPENAI_API_KEY` | 需指定 `LLM_MODEL` | json_schema |
-| DeepSeek | `DEEPSEEK_API_KEY` | 需指定 `LLM_MODEL` | json_object + schema 注入 |
-| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-6 | tool use |
+| 厂商      | 环境变量              | 默认模型            | 结构化输出                |
+| --------- | --------------------- | ------------------- | ------------------------- |
+| 智谱 GLM  | `ZHIPU_API_KEY`     | glm-4.6             | json_object + schema 注入 |
+| OpenAI    | `OPENAI_API_KEY`    | 需指定`LLM_MODEL` | json_schema               |
+| DeepSeek  | `DEEPSEEK_API_KEY`  | 需指定`LLM_MODEL` | json_object + schema 注入 |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-6   | tool use                  |
 
 所有 provider 共享：3-5 次指数退避重试、schema 校验失败自动回传错误自愈重试、限流（429）长退避。
 
